@@ -1,0 +1,53 @@
+# Rust
+target/
+**/*.rs.bk
+*.profraw
+
+# macOS
+.DS_Store
+
+# Xcode
+platforms/macos/build/
+platforms/macos/DerivedData/
+platforms/macos/Blaze.xcodeproj/
+*.xcuserstate
+
+# Generated FFI bindings & frameworks
+platforms/macos/Generated/
+dist/
+*.xcframework
+
+# Fuzzing
+fuzz/target/
+fuzz/corpus/**/crash-*
+fuzz/artifacts/
+
+# Speckit / AI planning artifacts
+.specify/
+specs/*/tasks.md
+specs/*/plan.md
+specs/*/research.md
+specs/*/checklists/
+specs/*/contracts/
+
+# Environment / editor
+.env*
+*.log
+*.tmp
+*.swp
+.idea/
+.vscode/settings.json
+
+# Local profile data accidentally created in-repo
+profile.db*
+settings.json.tmp
+
+# Build outputs and release artifacts
+*.dmg
+*.pkg
+*.zip
+*.tar.gz
+Blaze.app/
+
+# Cargo lock for libraries (keep for apps — remove this line if preferred)
+# Cargo.lock
