@@ -24,11 +24,9 @@ fuzz/artifacts/
 
 # Speckit / AI planning artifacts
 .specify/
-specs/*/tasks.md
-specs/*/plan.md
-specs/*/research.md
-specs/*/checklists/
-specs/*/contracts/
+specs/*
+.github/agents/*
+.github/prompts/*
 
 # Environment / editor
 .env*
