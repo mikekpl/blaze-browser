@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "lists": [
+    {
+      "id": "easylist",
+      "title": "EasyList",
+      "source_url": "https://easylist.to/easylist/easylist.txt",
+      "file": "easylist.txt",
+      "enabled": true
+    },
+    {
+      "id": "easyprivacy",
+      "title": "EasyPrivacy",
+      "source_url": "https://easylist.to/easylist/easyprivacy.txt",
+      "file": "easyprivacy.txt",
+      "enabled": true
+    }
+  ]
+}

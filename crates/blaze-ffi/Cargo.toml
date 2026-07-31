@@ -1,0 +1,33 @@
+[package]
+name = "blaze-ffi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["lib", "staticlib", "cdylib"]
+name = "blaze_ffi"
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+
+[dependencies]
+blaze-core = { workspace = true }
+blaze-adblock = { workspace = true }
+blaze-engine = { workspace = true }
+blaze-storage = { workspace = true }
+blaze-net = { workspace = true }
+url = { workspace = true }
+tracing = { workspace = true }
+uniffi = { workspace = true, features = ["cli"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+# FFI boundary: the only crate where `unsafe` is permitted, each use needs a SAFETY comment.
+[lints.rust]
+unsafe_code = "allow"

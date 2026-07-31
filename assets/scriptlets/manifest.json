@@ -1,0 +1,23 @@
+{
+  "version": 2,
+  "scriptlets": [
+    {
+      "name": "yt-ad-prune",
+      "hosts": ["youtube.com", "youtube-nocookie.com", "youtu.be"],
+      "file": "yt-ad-prune.js",
+      "main_frame_only": false
+    },
+    {
+      "name": "yt-set-constant",
+      "hosts": ["youtube.com", "youtube-nocookie.com"],
+      "file": "yt-set-constant.js",
+      "main_frame_only": false
+    },
+    {
+      "name": "anti-adblock-stealth",
+      "hosts": ["*"],
+      "file": "anti-adblock-stealth.js",
+      "main_frame_only": false
+    }
+  ]
+}

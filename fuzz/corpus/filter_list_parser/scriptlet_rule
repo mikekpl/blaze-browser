@@ -1,0 +1,3 @@
+! comment
+/banner/*$image,domain=news.example
+##+js(set-constant, adsEnabled, false)

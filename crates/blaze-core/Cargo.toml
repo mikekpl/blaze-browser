@@ -1,0 +1,26 @@
+[package]
+name = "blaze-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+blaze-engine = { workspace = true }
+blaze-media = { workspace = true }
+blaze-net = { workspace = true }
+rusqlite = { workspace = true }
+blaze-storage = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+proptest = { workspace = true }
+
+[lints]
+workspace = true

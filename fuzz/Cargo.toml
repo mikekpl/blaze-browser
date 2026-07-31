@@ -1,0 +1,40 @@
+[package]
+name = "blaze-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+blaze-net = { path = "../crates/blaze-net" }
+blaze-adblock = { path = "../crates/blaze-adblock" }
+blaze-engine = { path = "../crates/blaze-engine" }
+blaze-storage = { path = "../crates/blaze-storage" }
+serde_json = "1"
+
+# Detach from the root workspace: fuzzing runs on nightly with sanitizers.
+[workspace]
+
+[[bin]]
+name = "url_parser"
+path = "fuzz_targets/url_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "filter_list_parser"
+path = "fuzz_targets/filter_list_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "settings_deserializer"
+path = "fuzz_targets/settings_deserializer.rs"
+test = false
+doc = false
+bench = false

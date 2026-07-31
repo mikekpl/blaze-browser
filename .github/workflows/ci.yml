@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust (fmt, clippy, tests, audit)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --workspace
+      - name: Audit
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit
+      - name: Deny (licenses + advisories)
+        run: |
+          cargo install cargo-deny --locked
+          cargo deny check
+
+  portability:
+    name: Portability matrix (FR-031)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Core crates compile for all future targets
+        run: ./scripts/check-portability.sh
+
+  sanitizers:
+    name: Sanitizers (ASan + TSan)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - uses: Swatinem/rust-cache@v2
+      - name: AddressSanitizer
+        env:
+          RUSTFLAGS: -Zsanitizer=address
+          ASAN_OPTIONS: detect_leaks=0 # rusqlite's bundled SQLite has known one-time allocs
+        run: |
+          cargo +nightly test -Zbuild-std --target aarch64-apple-darwin \
+            -p blaze-storage -p blaze-adblock -p blaze-net -p blaze-media -p blaze-engine-servo
+      - name: ThreadSanitizer
+        env:
+          RUSTFLAGS: -Zsanitizer=thread
+        run: |
+          cargo +nightly test -Zbuild-std --target aarch64-apple-darwin \
+            -p blaze-storage -p blaze-core --lib
+
+  fuzz-smoke:
+    name: Fuzz targets (build + corpus smoke)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Run each target over its committed corpus
+        run: |
+          for target in url_parser filter_list_parser settings_deserializer; do
+            cargo +nightly fuzz run "$target" -- -runs=0 "fuzz/corpus/$target"
+          done
+
+  benchmarks:
+    name: Performance gates (SC-004)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Filter-match p99 gate (<100µs)
+        env:
+          BLAZE_PERF_GATE: "1"
+        run: cargo bench -p blaze-adblock
+
+  macos-shell:
+    name: macOS shell (XCTest)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Build Rust XCFramework + bindings
+        run: ./scripts/build-xcframework.sh
+      - name: Generate Xcode project
+        run: cd platforms/macos && xcodegen generate
+      - name: Build app
+        run: |
+          xcodebuild -project platforms/macos/Blaze.xcodeproj -scheme Blaze \
+            -configuration Debug -destination 'platform=macOS' build
