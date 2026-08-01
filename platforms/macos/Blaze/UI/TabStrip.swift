@@ -5,13 +5,21 @@ struct TabStrip: View {
     @EnvironmentObject private var bridge: CoreBridge
     let windowId: String
     @State private var plusHovering = false
+    @State private var draggingTabId: String?
     @State private var stripView: NSView?
     @State private var keyMonitor: Any?
 
     private var window: WindowInfo? { bridge.browserState.window(windowId) }
     private var tabs: [TabInfo] { window?.tabs ?? [] }
+    private static let reservedChromeWidth: CGFloat = 72 + 22 + 8 + 4 * 3
+    
+    private var tabsContentWidth: CGFloat {
+        tabs.reduce(CGFloat(8)) { $0 + ($1.pinned ? 36 : 220) }
+            + CGFloat(max(0, tabs.count - 1)) * 4
+    }
 
     var body: some View {
+        GeometryReader { geo in
         HStack(spacing: 4) {
             // Traffic light clearance — this area also moves the window on drag.
             WindowMoveArea().frame(width: 72)
@@ -23,13 +31,15 @@ struct TabStrip: View {
                             TabItem(
                                 tab: tab,
                                 isActive: window?.activeTabId == tab.id,
-                                windowId: windowId)
+                                windowId: windowId,
+                                draggingTabId: $draggingTabId)
                                 .id(tab.id)
                         }
                     }
                     .animation(.interactiveSpring(response: 0.28, dampingFraction: 0.72), value: tabs.map(\.id))
                     .padding(.horizontal, 4)
-                    .padding(.vertical, 2)
+                    .padding(.vertical, 3)
+                    .coordinateSpace(name: "TabStrip")
                 }
                 .onChange(of: window?.activeTabId) { active in
                     if let active {
@@ -37,6 +47,8 @@ struct TabStrip: View {
                     }
                 }
             }
+            // hug the tabs so leftover chrome stays a window-drag area
+            .frame(width: min(tabsContentWidth, max(0, geo.size.width - Self.reservedChromeWidth)))
 
             Button {
                 bridge.createTab(windowId: windowId)
@@ -56,8 +68,12 @@ struct TabStrip: View {
             }
             .help("New Tab (⌘T)")
             .padding(.trailing, 8)
+
+            WindowMoveArea().frame(maxWidth: .infinity)
         }
-        .frame(height: 34)
+        .frame(width: geo.size.width, height: geo.size.height)
+        }
+        .frame(height: 38)
         .background(
             LinearGradient(
                 colors: [
@@ -108,8 +124,15 @@ private struct TabItem: View {
     let tab: TabInfo
     let isActive: Bool
     let windowId: String
+    @Binding var draggingTabId: String?
     @State private var isHovering = false
+    @State private var grabOffsetX: CGFloat = 0
+    @State private var dragOffsetX: CGFloat = 0
+    @State private var isDetaching = false
 
+    private static let detachDistance: CGFloat = 48
+
+    private var isDragging: Bool { draggingTabId == tab.id }
     private var window: WindowInfo? { bridge.browserState.window(windowId) }
     private var tabIndex: Int? { window?.tabs.firstIndex { $0.id == tab.id } }
     private var tabCount: Int { window?.tabs.count ?? 0 }
@@ -143,55 +166,43 @@ private struct TabItem: View {
                     .foregroundStyle(isActive ? .primary : .secondary)
                     .opacity(tab.state == "suspended" ? 0.5 : 1)
                 Spacer(minLength: 0)
-                controlButton("chevron.left", help: "Move Tab Left") { move(by: -1) }
-                    .disabled(tabIndex == 0)
-                controlButton("chevron.right", help: "Move Tab Right") { move(by: 1) }
-                    .disabled(tabIndex == tabCount - 1)
-                controlButton("arrow.up.forward.app", help: "Pop Tab into New Window") { popOut() }
-                    .disabled(tabCount < 2)
                 Button {
                     bridge.closeTab(tab.id)
                 } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 8, weight: .bold))
                         .frame(width: 16, height: 16)
-                        .background(Circle().fill(Color.primary.opacity(
-                            isHovering || isActive ? 0.08 : 0)))
-                        .contentShape(Circle())
+                        .background(RoundedRectangle(cornerRadius: 4).fill(
+                            Color.primary.opacity(isHovering || isActive ? 0.08 : 0)))
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .opacity(isHovering || isActive ? 1 : 0)
                 .help("Close Tab (⌘W)")
             }
         }
         .padding(.horizontal, tab.pinned ? 0 : 8)
-        .padding(.vertical, 4)
-        .frame(width: tabWidth)
+        .frame(width: tabWidth, height: 30)
         .background(
-            Capsule()
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(isActive
                       ? AnyShapeStyle(Color(nsColor: .controlBackgroundColor))
                       : isHovering
-                          ? AnyShapeStyle(Color.primary.opacity(0.06))
+                          ? AnyShapeStyle(Color.primary.opacity(0.07))
                           : AnyShapeStyle(Color.clear))
-                .shadow(color: isActive ? .black.opacity(0.18) : .clear,
-                        radius: 3, y: 1))
-        .overlay(
-            Capsule()
-                .strokeBorder(
-                    isActive
-                        ? LinearGradient(
-                            colors: [Color.accentColor.opacity(0.55),
-                                     Color.accentColor.opacity(0.2)],
-                            startPoint: .topLeading, endPoint: .bottomTrailing)
-                        : LinearGradient(colors: [.clear], startPoint: .top, endPoint: .bottom),
-                    lineWidth: 1))
-        .contentShape(Capsule())
+                .shadow(color: isActive ? .black.opacity(0.15) : .clear,
+                        radius: 2, y: 1))
+        .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         .background(WindowDragBlocker())
+        .offset(x: isDragging ? dragOffsetX : 0)
+        .scaleEffect(isDragging ? 1.02 : 1)
+        .shadow(color: isDragging ? .black.opacity(0.25) : .clear, radius: 8, y: 3)
+        .opacity(isDetaching ? 0.6 : 1)
+        .zIndex(isDragging ? 1 : 0)
         .animation(.easeOut(duration: 0.15), value: isActive)
         .animation(.easeOut(duration: 0.12), value: isHovering)
         .onHover { hovering in isHovering = hovering }
         .onTapGesture { bridge.activateTab(tab.id) }
+        .gesture(dragGesture)
         .contextMenu {
             Button(tab.pinned ? "Unpin Tab" : "Pin Tab") {
                 bridge.setPinned(tab.id, pinned: !tab.pinned)
@@ -216,29 +227,63 @@ private struct TabItem: View {
         }
     }
 
-    /// Hover-revealed tab control (move left/right, pop out).
-    private func controlButton(
-        _ icon: String, help: String, action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 9, weight: .semibold))
-                .frame(width: 16, height: 16)
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
-        .opacity(isHovering || isActive ? 1 : 0)
-        .help(help)
+    /// Live drag: the tab follows the pointer, reorders as it crosses slot
+    /// boundaries, and releasing ≥ detachDistance above/below the strip pops
+    /// it into a new window.
+    private var dragGesture: some Gesture {
+        DragGesture(minimumDistance: 4, coordinateSpace: .named("TabStrip"))
+            .onChanged { value in
+                guard let window else { return }
+                if draggingTabId != tab.id {
+                    draggingTabId = tab.id
+                    bridge.activateTab(tab.id)
+                    grabOffsetX = value.startLocation.x
+                        - minX(at: tabIndex ?? 0, in: window.tabs)
+                }
+                let desiredMinX = value.location.x - grabOffsetX
+                let target = slotIndex(forCenter: desiredMinX + tabWidth / 2,
+                                       in: window.tabs)
+                if let index = tabIndex, target != index {
+                    withAnimation(.interactiveSpring(response: 0.28, dampingFraction: 0.72)) {
+                        bridge.reorderTab(tab.id, to: target)
+                    }
+                }
+                // recompute against post-reorder state so the tab keeps tracking the pointer
+                if let tabs = self.window?.tabs, let index = tabIndex {
+                    dragOffsetX = desiredMinX - minX(at: index, in: tabs)
+                }
+                isDetaching = abs(value.translation.height) > Self.detachDistance
+            }
+            .onEnded { value in
+                let shouldDetach = abs(value.translation.height) > Self.detachDistance
+                    && tabCount > 1
+                withAnimation(.interactiveSpring(response: 0.28, dampingFraction: 0.72)) {
+                    dragOffsetX = 0
+                    isDetaching = false
+                }
+                draggingTabId = nil
+                if shouldDetach { popOut() }
+            }
     }
 
-    private func move(by delta: Int) {
-        guard let index = tabIndex, let window,
-              window.tabs.indices.contains(index + delta)
-        else { return }
-        withAnimation(.interactiveSpring(response: 0.28, dampingFraction: 0.72)) {
-            bridge.reorderTab(tab.id, to: index + delta)
+    /// Leading x of the tab slot at `index` in strip coordinates.
+    private func minX(at index: Int, in tabs: [TabInfo]) -> CGFloat {
+        var x: CGFloat = 4  // strip leading padding
+        for i in 0..<min(index, tabs.count) {
+            x += (tabs[i].pinned ? CGFloat(36) : CGFloat(220)) + 4
         }
+        return x
+    }
+
+    /// Slot whose bounds contain `centerX`.
+    private func slotIndex(forCenter centerX: CGFloat, in tabs: [TabInfo]) -> Int {
+        var x: CGFloat = 4
+        for (i, t) in tabs.enumerated() {
+            let width = (t.pinned ? CGFloat(36) : CGFloat(220)) + 4
+            if centerX < x + width { return i }
+            x += width
+        }
+        return max(0, tabs.count - 1)
     }
 
     private func popOut() {
@@ -300,13 +345,17 @@ private struct WindowDragBlocker: NSViewRepresentable {
     }
 }
 
-/// NSView that calls performDrag to move the window — used for the dead zone beside traffic lights.
 private struct WindowMoveArea: NSViewRepresentable {
     func makeNSView(context: Context) -> _View { _View() }
     func updateNSView(_ nsView: _View, context: Context) {}
     final class _View: NSView {
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
         override func mouseDown(with event: NSEvent) {
-            window?.performDrag(with: event)
+            if event.clickCount == 2 {
+                window?.zoom(nil)
+            } else {
+                window?.performDrag(with: event)
+            }
         }
     }
 }
