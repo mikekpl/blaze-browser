@@ -119,6 +119,11 @@ struct BrowserWindow: View {
     /// Reconcile web views with core state: resume the active tab if it was
     /// suspended, drop web views for suspended/closed tabs (FR-016).
     private func syncWithState() {
+        // last tab closed → core window is gone; close the AppKit window too
+        if let windowId, bridge.browserState.window(windowId) == nil {
+            hostWindow?.close()
+            return
+        }
         store.sync(with: window)
         guard let tab = activeTab else {
             activeBackend = nil
@@ -128,6 +133,10 @@ struct BrowserWindow: View {
         if activeBackend !== backend {
             activeBackend = backend
             addressText = tab.url == "about:newtab" ? "" : tab.url
+            if tab.url == "about:newtab" || tab.url.isEmpty {
+                // async: the new tab's toolbar must mount before focus can land
+                DispatchQueue.main.async { addressFocused = true }
+            }
         }
     }
 

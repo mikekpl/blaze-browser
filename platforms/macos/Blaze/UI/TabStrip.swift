@@ -1,12 +1,12 @@
 import SwiftUI
 import AppKit
-import UniformTypeIdentifiers
 
 struct TabStrip: View {
     @EnvironmentObject private var bridge: CoreBridge
     let windowId: String
-    @State private var draggingTabId: String?
     @State private var plusHovering = false
+    @State private var stripView: NSView?
+    @State private var keyMonitor: Any?
 
     private var window: WindowInfo? { bridge.browserState.window(windowId) }
     private var tabs: [TabInfo] { window?.tabs ?? [] }
@@ -23,8 +23,7 @@ struct TabStrip: View {
                             TabItem(
                                 tab: tab,
                                 isActive: window?.activeTabId == tab.id,
-                                windowId: windowId,
-                                draggingTabId: $draggingTabId)
+                                windowId: windowId)
                                 .id(tab.id)
                         }
                     }
@@ -66,23 +65,56 @@ struct TabStrip: View {
                     Color(nsColor: .underPageBackgroundColor).opacity(0.6),
                 ],
                 startPoint: .top, endPoint: .bottom))
+        .background(StripFrameReader { stripView = $0 })
         // double-tap anywhere in the strip zooms the window (like macOS title bar)
         .simultaneousGesture(TapGesture(count: 2).onEnded { _ in NSApp.keyWindow?.zoom(nil) })
+        .onAppear(perform: installKeyMonitor)
+        .onDisappear {
+            if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+            keyMonitor = nil
+        }
+    }
+
+    /// ⌘←/⌘→ re-arranges the active tab; skipped while editing text so the
+    /// address bar keeps its line-start/line-end behavior.
+    private func installKeyMonitor() {
+        guard keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.keyCode == 123 || event.keyCode == 124,  // ← / →
+                  event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+                  let view = stripView, view.window === NSApp.keyWindow,
+                  !(view.window?.firstResponder is NSTextView)
+            else { return event }
+            moveActiveTab(by: event.keyCode == 123 ? -1 : 1)
+            return nil
+        }
+    }
+
+    private func moveActiveTab(by delta: Int) {
+        guard let window else { return }
+        let activeId = window.activeTabId
+        guard let index = window.tabs.firstIndex(where: { $0.id == activeId }),
+              window.tabs.indices.contains(index + delta)
+        else { return }
+        withAnimation(.interactiveSpring(response: 0.28, dampingFraction: 0.72)) {
+            bridge.reorderTab(activeId, to: index + delta)
+        }
     }
 }
 
 private struct TabItem: View {
     @EnvironmentObject private var bridge: CoreBridge
+    @Environment(\.openWindow) private var openWindow
     let tab: TabInfo
     let isActive: Bool
     let windowId: String
-    @Binding var draggingTabId: String?
     @State private var isHovering = false
 
-    private var isDragging: Bool { draggingTabId == tab.id }
     private var window: WindowInfo? { bridge.browserState.window(windowId) }
+    private var tabIndex: Int? { window?.tabs.firstIndex { $0.id == tab.id } }
+    private var tabCount: Int { window?.tabs.count ?? 0 }
     // fixed widths — pinned tabs show only favicon
-    private var tabWidth: CGFloat { tab.pinned ? 36 : 160 }
+    private var tabWidth: CGFloat { tab.pinned ? 36 : 220 }
 
     var body: some View {
         HStack(spacing: 5) {
@@ -111,6 +143,12 @@ private struct TabItem: View {
                     .foregroundStyle(isActive ? .primary : .secondary)
                     .opacity(tab.state == "suspended" ? 0.5 : 1)
                 Spacer(minLength: 0)
+                controlButton("chevron.left", help: "Move Tab Left") { move(by: -1) }
+                    .disabled(tabIndex == 0)
+                controlButton("chevron.right", help: "Move Tab Right") { move(by: 1) }
+                    .disabled(tabIndex == tabCount - 1)
+                controlButton("arrow.up.forward.app", help: "Pop Tab into New Window") { popOut() }
+                    .disabled(tabCount < 2)
                 Button {
                     bridge.closeTab(tab.id)
                 } label: {
@@ -149,22 +187,11 @@ private struct TabItem: View {
                         : LinearGradient(colors: [.clear], startPoint: .top, endPoint: .bottom),
                     lineWidth: 1))
         .contentShape(Capsule())
-        .scaleEffect(isDragging ? 1.05 : 1)
-        .shadow(color: isDragging ? .black.opacity(0.30) : .clear, radius: 12, y: 6)
-        .opacity(isDragging ? 0.88 : 1)
-        .zIndex(isDragging ? 1 : 0)
-        .animation(.interactiveSpring(response: 0.28, dampingFraction: 0.72), value: isDragging)
+        .background(WindowDragBlocker())
         .animation(.easeOut(duration: 0.15), value: isActive)
         .animation(.easeOut(duration: 0.12), value: isHovering)
         .onHover { hovering in isHovering = hovering }
         .onTapGesture { bridge.activateTab(tab.id) }
-        .onDrag {
-            draggingTabId = tab.id
-            return NSItemProvider(object: tab.id as NSString)
-        }
-        .onDrop(of: [UTType.text], delegate: TabReorderDropDelegate(
-            targetTab: tab, windowId: windowId,
-            draggingTabId: $draggingTabId, bridge: bridge))
         .contextMenu {
             Button(tab.pinned ? "Unpin Tab" : "Pin Tab") {
                 bridge.setPinned(tab.id, pinned: !tab.pinned)
@@ -173,16 +200,51 @@ private struct TabItem: View {
                 bridge.setMuted(tab.id, muted: tab.audioState != "muted")
             }
             Divider()
-            Button("Move Tab to New Window") {
-                _ = WindowManager.moveTabToNewWindow(tab.id, bridge: bridge)
-            }
-            .disabled((window?.tabs.count ?? 0) < 2)
+            Button("Move Tab to New Window") { popOut() }
+            .disabled(tabCount < 2)
             Divider()
             Button("Reopen Closed Tab") {
                 bridge.reopenClosedTab(windowId: windowId)
             }
             Button("Close Tab") { bridge.closeTab(tab.id) }
+            Button("Close All Other Tabs") {
+                for other in window?.tabs ?? [] where other.id != tab.id {
+                    bridge.closeTab(other.id)
+                }
+            }
+            .disabled(tabCount < 2)
         }
+    }
+
+    /// Hover-revealed tab control (move left/right, pop out).
+    private func controlButton(
+        _ icon: String, help: String, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 9, weight: .semibold))
+                .frame(width: 16, height: 16)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .opacity(isHovering || isActive ? 1 : 0)
+        .help(help)
+    }
+
+    private func move(by delta: Int) {
+        guard let index = tabIndex, let window,
+              window.tabs.indices.contains(index + delta)
+        else { return }
+        withAnimation(.interactiveSpring(response: 0.28, dampingFraction: 0.72)) {
+            bridge.reorderTab(tab.id, to: index + delta)
+        }
+    }
+
+    private func popOut() {
+        guard let newWindowId = WindowManager.moveTabToNewWindow(tab.id, bridge: bridge)
+        else { return }
+        openWindow(value: newWindowId)
     }
 
     private var displayTitle: String {
@@ -217,30 +279,24 @@ private struct TabItem: View {
     }
 }
 
-/// Drag-to-reorder: entering another tab's frame mid-drag reorders live.
-struct TabReorderDropDelegate: DropDelegate {
-    let targetTab: TabInfo
-    let windowId: String
-    @Binding var draggingTabId: String?
-    let bridge: CoreBridge
-
-    func dropEntered(info: DropInfo) {
-        guard let dragging = draggingTabId, dragging != targetTab.id,
-              let window = bridge.browserState.window(windowId),
-              let to = window.tabs.firstIndex(where: { $0.id == targetTab.id })
-        else { return }
-        withAnimation(.interactiveSpring(response: 0.28, dampingFraction: 0.72)) {
-            bridge.reorderTab(dragging, to: to)
-        }
+/// Reports the strip's backing NSView so key events can be scoped to its window.
+private struct StripFrameReader: NSViewRepresentable {
+    let onCapture: (NSView) -> Void
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { onCapture(view) }
+        return view
     }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
 
-    func dropUpdated(info: DropInfo) -> DropProposal? {
-        DropProposal(operation: .move)
-    }
-
-    func performDrop(info: DropInfo) -> Bool {
-        draggingTabId = nil
-        return true
+/// AppKit blocker under each tab: stops titlebar window-dragging there so
+/// clicks on a tab never move the window. Events still bubble to SwiftUI gestures.
+private struct WindowDragBlocker: NSViewRepresentable {
+    func makeNSView(context: Context) -> _View { _View() }
+    func updateNSView(_ nsView: _View, context: Context) {}
+    final class _View: NSView {
+        override var mouseDownCanMoveWindow: Bool { false }
     }
 }
 

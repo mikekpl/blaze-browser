@@ -237,13 +237,8 @@ final class CoreBridge: ObservableObject {
     }
 
     func closeTab(_ tabId: String) {
-        // Closing a window's last tab tears down the core window, stranding the
-        // SwiftUI window with a dead id (⌘T / "+" stop working). Keep the window
-        // alive by replacing the final tab with a fresh one first.
-        if let window = browserState.windows.first(where: { w in w.tabs.contains { $0.id == tabId } }),
-           window.tabs.count == 1 {
-            _ = try? core?.createTab(windowId: window.id, url: nil)
-        }
+        // Closing a window's last tab tears down the core window; the SwiftUI
+        // window notices the dead id in syncWithState and closes itself.
         try? core?.closeTab(tabId: tabId)
         shieldStats.removeValue(forKey: tabId)
         refreshState()
