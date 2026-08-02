@@ -19,16 +19,12 @@
 
 ---
 
-## Screenshots
-
 <p align="center">
-  <img src="assets/blaze-dark.png" width="680" alt="Blaze Browser – dark mode"/>
-  <br/><em>Dark mode</em>
+  <img src="assets/blaze-dark.png" width="680" />
 </p>
 
 <p align="center">
-  <img src="assets/blaze-light.png" width="680" alt="Blaze Browser – light mode"/>
-  <br/><em>Light mode</em>
+  <img src="assets/blaze-light.png" width="680" />
 </p>
 
 ---
