@@ -42,20 +42,18 @@ Most browsers are Chromium wrappers — they carry Google's rendering engine, te
 
 ## Features
 
-| | |
-|---|---|
-| 🔥 **Sub-microsecond ad blocking** | Rust-native filter engine, no extension overhead |
-| 🪶 **Lightweight** | Tab suspension frees memory automatically |
-| 🚫 **Zero telemetry** | No data ever leaves your device |
-| 🌙 **Dark & light mode** | Follows macOS system appearance instantly |
-| 📑 **Full tab management** | Create, close, pin, mute, reorder, move between windows |
-| 🔖 **Bookmarks** | Toolbar, bookmarks bar, and full manager |
-| ⬇️ **Downloads** | Native download engine with pause/resume/progress |
-| 🎬 **Video & audio** | YouTube, streaming sites, and any HTML5 media |
-| 🔒 **Per-site ad-block exceptions** | Allowlist individual domains with one click |
-| 🗂 **Session restore** | All windows and tabs come back exactly where you left them |
-| ♾️ **Multiple windows** | Drag tabs out to new windows, merge them back |
-| 🔍 **Smart address bar** | URLs, searches, and bookmarks in one field |
+* 🔥 **Sub-microsecond ad blocking** - Rust-native filter engine, no extension overhead
+* 🪶 **Lightweight** - Tab suspension frees memory automatically
+* 🚫 **Zero telemetry** - No data ever leaves your device
+* 🌙 **Dark & light mode** - Follows macOS system appearance instantly
+* 📑 **Full tab management** - Create, close, pin, mute, reorder, move between windows
+* 🔖 **Bookmarks** - Toolbar, bookmarks bar, and full manager
+* ⬇️ **Downloads** - Native download engine with pause/resume/progress
+* 🎬 **Video & audio** - YouTube, streaming sites, and any HTML5 media
+* 🔒 **Per-site ad-block exceptions** - Allowlist individual domains with one click
+* 🗂 **Session restore** - All windows and tabs come back exactly where you left them
+* ♾️ **Multiple windows** - Drag tabs out to new windows, merge them back
+* 🔍 **Smart address bar** - URLs, searches, and bookmarks in one field
 
 ---
 
