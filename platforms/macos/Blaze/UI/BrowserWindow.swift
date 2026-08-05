@@ -75,6 +75,10 @@ struct BrowserWindow: View {
         .background(WindowAccessor(window: $hostWindow))
         .onAppear(perform: bindWindow)
         .onChange(of: bridge.browserState) { _ in syncWithState() }
+        .onChange(of: hostWindow) { win in
+            // cross-window tab drops hit-test against this registry
+            if let win, let windowId { WindowManager.registerHost(win, for: windowId) }
+        }
         .onChange(of: activeBackend?.currentURL) { url in
             if let url, !addressFocused { addressText = url }
         }
@@ -123,6 +127,9 @@ struct BrowserWindow: View {
         if let windowId, bridge.browserState.window(windowId) == nil {
             hostWindow?.close()
             return
+        }
+        if let windowId, let hostWindow {
+            WindowManager.registerHost(hostWindow, for: windowId)
         }
         store.sync(with: window)
         guard let tab = activeTab else {

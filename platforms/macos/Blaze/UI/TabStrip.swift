@@ -227,9 +227,6 @@ private struct TabItem: View {
         }
     }
 
-    /// Live drag: the tab follows the pointer, reorders as it crosses slot
-    /// boundaries, and releasing ≥ detachDistance above/below the strip pops
-    /// it into a new window.
     private var dragGesture: some Gesture {
         DragGesture(minimumDistance: 4, coordinateSpace: .named("TabStrip"))
             .onChanged { value in
@@ -252,18 +249,44 @@ private struct TabItem: View {
                 if let tabs = self.window?.tabs, let index = tabIndex {
                     dragOffsetX = desiredMinX - minX(at: index, in: tabs)
                 }
-                isDetaching = abs(value.translation.height) > Self.detachDistance
+                let overOtherStrip = WindowManager.mergeTarget(
+                    atScreenPoint: NSEvent.mouseLocation, excluding: windowId) != nil
+                isDetaching = overOtherStrip
+                    || abs(value.translation.height) > Self.detachDistance
             }
             .onEnded { value in
                 let shouldDetach = abs(value.translation.height) > Self.detachDistance
                     && tabCount > 1
+                let mergeTarget = WindowManager.mergeTarget(
+                    atScreenPoint: NSEvent.mouseLocation, excluding: windowId)
                 withAnimation(.interactiveSpring(response: 0.28, dampingFraction: 0.72)) {
                     dragOffsetX = 0
                     isDetaching = false
                 }
                 draggingTabId = nil
-                if shouldDetach { popOut() }
+                if let mergeTarget {
+                    merge(into: mergeTarget)
+                } else if shouldDetach {
+                    popOut()
+                }
             }
+    }
+
+    /// Move the tab into another window's strip at the drop position and
+    /// bring that window to front; an emptied source window closes itself.
+    private func merge(into target: (windowId: String, nsWindow: NSWindow, xInStrip: CGFloat)) {
+        let destTabs = bridge.browserState.window(target.windowId)?.tabs ?? []
+        // past the last tab → append
+        let endX = minX(at: destTabs.count, in: destTabs)
+        let slot = target.xInStrip >= endX
+            ? destTabs.count
+            : slotIndex(forCenter: target.xInStrip, in: destTabs)
+        bridge.moveTab(tab.id, toWindow: target.windowId, position: slot)
+        bridge.activateTab(tab.id)
+        target.nsWindow.makeKeyAndOrderFront(nil)
+        if let source = bridge.browserState.window(windowId), source.tabs.isEmpty {
+            bridge.closeWindow(windowId)
+        }
     }
 
     /// Leading x of the tab slot at `index` in strip coordinates.

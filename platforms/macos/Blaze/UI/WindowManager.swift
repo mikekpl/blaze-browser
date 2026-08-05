@@ -26,6 +26,39 @@ enum WindowManager {
         let count = bridge.browserState.window(windowId)?.tabs.count ?? 0
         bridge.moveTab(tabId, toWindow: windowId, position: count)
     }
+
+    /// Live AppKit window per core window id, weakly held.
+    private static let hostWindows = NSMapTable<NSString, NSWindow>(
+        keyOptions: .copyIn, valueOptions: .weakMemory)
+
+    static func registerHost(_ window: NSWindow, for windowId: String) {
+        hostWindows.setObject(window, forKey: windowId as NSString)
+    }
+
+    /// Frontmost browser window whose tab-strip zone contains `screenPoint`.
+    /// Returns nil when the point is over the source window's own strip
+    /// (that's a plain reorder) or over no strip at all.
+    static func mergeTarget(atScreenPoint point: NSPoint, excluding sourceWindowId: String)
+        -> (windowId: String, nsWindow: NSWindow, xInStrip: CGFloat)? {
+        var idsByWindow: [ObjectIdentifier: String] = [:]
+        for case let key as NSString in hostWindows.keyEnumerator() {
+            if let win = hostWindows.object(forKey: key) {
+                idsByWindow[ObjectIdentifier(win)] = key as String
+            }
+        }
+        for win in NSApp.orderedWindows where win.isVisible {
+            guard let id = idsByWindow[ObjectIdentifier(win)] else { continue }
+            let frame = win.frame
+            // strip occupies the top 38pt; pad a little for a forgiving drop zone
+            let stripZone = NSRect(x: frame.minX, y: frame.maxY - 44,
+                                   width: frame.width, height: 52)
+            guard stripZone.contains(point) else { continue }
+            guard id != sourceWindowId else { return nil }
+            // 76 = traffic-light move area (72) + strip HStack spacing (4)
+            return (id, win, point.x - frame.minX - 76)
+        }
+        return nil
+    }
 }
 
 /// T038: one live `WebKitBackend` per non-suspended tab. Suspending a tab
