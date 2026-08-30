@@ -1,3 +1,4 @@
 [toolchain]
-channel = "stable"
+# Pinned to the toolchain servo v0.4.0 is built and tested with.
+channel = "1.95.0"
 components = ["clippy", "rustfmt"]

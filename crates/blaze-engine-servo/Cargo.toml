@@ -6,12 +6,18 @@ rust-version.workspace = true
 license.workspace = true
 
 [features]
-# The real libservo embedding lands in Phase 9 (T070); off by default.
-servo = []
+# Real libservo (servo v0.4.0) embedding; off by default because it pulls in
+# the full engine (SpiderMonkey, WebRender, Stylo).
+servo = ["dep:libservo", "dep:dpi", "dep:rustls", "dep:serde_json"]
 
 [dependencies]
 blaze-engine = { workspace = true }
 url = { workspace = true }
+libservo = { workspace = true, optional = true }
+# Must stay semver-compatible with the versions servo itself uses.
+dpi = { version = "0.1", optional = true }
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"], optional = true }
+serde_json = { workspace = true, optional = true }
 
 [lints]
 workspace = true

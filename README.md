@@ -33,7 +33,7 @@
 
 Most browsers are Chromium wrappers — they carry Google's rendering engine, telemetry hooks, and memory overhead whether you want them or not. Blaze takes a different path:
 
-- **No Chromium.** The core is pure Rust. The macOS shell uses Apple's WebKit as the rendering backend today, isolated behind a clean abstraction layer so a fully independent Servo-based engine can be swapped in without touching a single line of UI code.
+- **No Chromium.** The core is pure Rust. The macOS shell uses Apple's WebKit as the rendering backend today, isolated behind a clean abstraction layer — and a real [Servo](https://github.com/servo/servo) v0.4.0 embedding already implements the same interface behind a feature flag, so the fully independent Rust engine can be swapped in without touching a single line of UI code.
 - **No ads, ever.** A Brave-style Rust adblock engine runs natively in-process. Lists compile to a binary trie at startup — filter matching is sub-microsecond (p99 < 1 µs in benchmarks) with zero network round-trips.
 - **No telemetry, period.** Zero data collection, zero crash reporting, zero analytics. What you browse stays on your device.
 - **Memory efficient.** Tabs you haven't visited in a while are automatically suspended, freeing their memory. Background tabs cost almost nothing.
@@ -62,17 +62,21 @@ Most browsers are Chromium wrappers — they carry Google's rendering engine, te
 Blaze is not tied to any single rendering engine. The Rust core defines a single `WebEngine` trait:
 
 ```rust
-pub trait WebEngine: Send + Sync {
-    fn navigate(&self, url: &str);
-    fn reload(&self);
-    fn go_back(&self);
-    fn go_forward(&self);
-    fn evaluate_script(&self, js: &str);
-    fn state(&self) -> EngineState;
+pub trait WebEngine: Send {
+    fn navigate(&mut self, url: &Url);
+    fn go_back(&mut self);
+    fn go_forward(&mut self);
+    fn reload(&mut self);
+    fn stop(&mut self);
+    fn apply_blocking(&mut self, artifacts: BlockingArtifacts);
+    fn set_muted(&mut self, muted: bool);
+    fn suspend(&mut self);
+    fn resume(&mut self, url: &Url);
+    fn poll_title(&self) -> Option<String>;
 }
 ```
 
-Today, `WebKitBackend` implements this trait using Apple's `WKWebView` — giving full compatibility with every website while the native engine matures. Tomorrow, `ServoEngine` implements the same trait using Mozilla's Servo renderer in pure Rust. **Switching engines is a single line of configuration.** The Swift UI, the tab manager, the ad blocker, and the download engine have no knowledge of which backend is running.
+Today, `WebKitBackend` implements this trait using Apple's `WKWebView` — giving full compatibility with every website while the native engine matures. Alongside it, `EmbeddedServoEngine` implements the same trait on a **real embedded Servo v0.4.0** (`blaze-engine-servo --features servo`): each tab runs Servo on a dedicated engine thread with headless rendering, native request interception wired straight into the ad-block matcher, scriptlet/cosmetic-filter injection, and popup denial. **Switching engines is a single line of configuration.** The Swift UI, the tab manager, the ad blocker, and the download engine have no knowledge of which backend is running.
 
 ```
 ┌────────────────────────────────────────────────────┐
@@ -86,8 +90,8 @@ Today, `WebKitBackend` implements this trait using Apple's `WKWebView` — givin
 └──────────┬───────────────────────┬─────────────────┘
            │                       │
 ┌──────────▼──────────┐  ┌────────-▼──────────────────┐
-│  WebKitBackend      │  │  ServoEngine (in progress) │
-│  WKWebView via FFI  │  │  Rust-native renderer      │
+│  WebKitBackend      │  │  EmbeddedServoEngine       │
+│  WKWebView via FFI  │  │  Servo v0.4.0, pure Rust   │
 └─────────────────────┘  └───────────────────────────-┘
            │
 ┌──────────▼──────────────────────────────────────────┐
@@ -105,7 +109,7 @@ blaze-browser/
 ├── crates/
 │   ├── blaze-core        # Tab, window, session, downloads, bookmarks
 │   ├── blaze-engine      # WebEngine trait + shared types
-│   ├── blaze-engine-servo# Servo renderer stub (engine-parity tests pass)
+│   ├── blaze-engine-servo# Servo v0.4.0 embedding (--features servo) + simulated engine for parity tests
 │   ├── blaze-adblock     # Brave-style filter engine
 │   ├── blaze-net         # HTTP, range requests, download worker
 │   ├── blaze-storage     # SQLite profile: history, bookmarks, settings
@@ -146,7 +150,7 @@ Benchmarks run with `BLAZE_PERF_GATE=1 cargo bench -p blaze-adblock`.
 
 ## Contributing
 
-Pull requests are welcome. Please run `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace` before opening a PR. The CI pipeline also runs AddressSanitizer, ThreadSanitizer, and fuzz smoke tests on every push.
+Pull requests are welcome. The toolchain is pinned to Rust 1.95.0 (the version Servo v0.4.0 is built with) via `rust-toolchain.toml` — rustup picks it up automatically. Please run `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace` before opening a PR. The CI pipeline also runs AddressSanitizer, ThreadSanitizer, and fuzz smoke tests on every push.
 
 ---
 

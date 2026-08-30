@@ -12,9 +12,10 @@ members = [
 ]
 
 [workspace.package]
-version = "0.3.17"
+version = "0.5.0"
 edition = "2024"
-rust-version = "1.85"
+# servo 0.4.0 MSRV
+rust-version = "1.88"
 license = "MPL-2.0"
 
 [workspace.dependencies]
@@ -32,10 +33,11 @@ url = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 tracing = "0.1"
 dirs = "5"
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.37", features = ["bundled"] } # aligned with servo 0.4.0 (links = "sqlite3")
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "fs", "io-util"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "gzip", "blocking"] }
 adblock = { version = "0.13", default-features = false, features = ["embedded-domain-resolver", "full-regex-handling", "content-blocking"] }
+libservo = { package = "servo", version = "0.4.0" }
 uniffi = "0.29"
 proptest = "1"
 tempfile = "3"
