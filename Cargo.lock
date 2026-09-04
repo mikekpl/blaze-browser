@@ -629,7 +629,7 @@ dependencies = [
 
 [[package]]
 name = "blaze-adblock"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "adblock",
  "blaze-engine",
@@ -643,7 +643,7 @@ dependencies = [
 
 [[package]]
 name = "blaze-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "blaze-engine",
  "blaze-media",
@@ -662,7 +662,7 @@ dependencies = [
 
 [[package]]
 name = "blaze-engine"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "serde",
  "url",
@@ -670,7 +670,7 @@ dependencies = [
 
 [[package]]
 name = "blaze-engine-servo"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "blaze-engine",
  "dpi",
@@ -682,7 +682,7 @@ dependencies = [
 
 [[package]]
 name = "blaze-ffi"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "blaze-adblock",
  "blaze-core",
@@ -699,7 +699,7 @@ dependencies = [
 
 [[package]]
 name = "blaze-media"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "blaze-engine",
  "serde",
@@ -707,7 +707,7 @@ dependencies = [
 
 [[package]]
 name = "blaze-net"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "reqwest",
  "tempfile",
@@ -718,7 +718,7 @@ dependencies = [
 
 [[package]]
 name = "blaze-storage"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "dirs",
  "rusqlite",

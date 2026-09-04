@@ -129,6 +129,17 @@ final class WebKitBackend: NSObject, ObservableObject {
     func reload() { webView.reload() }
     func stop() { webView.stopLoading() }
 
+    /// Tab closed/suspended: kill playback (incl. fullscreen/PiP presentations)
+    /// and blank the page so no audio/video or decoder memory outlives the tab.
+    func teardown() {
+        webView.pauseAllMediaPlayback { [weak webView] in
+            webView?.closeAllMediaPresentations {
+                webView?.stopLoading()
+                webView?.load(URLRequest(url: URL(string: "about:blank")!))
+            }
+        }
+    }
+
     /// Mute/unmute the page's media elements (T042; no public WKWebView mute API).
     func setPageMuted(_ muted: Bool) {
         let js = "document.querySelectorAll('video,audio').forEach(m => { m.muted = \(muted); });"

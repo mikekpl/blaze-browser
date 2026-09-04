@@ -91,11 +91,13 @@ final class WebViewStore: ObservableObject {
     /// closed or suspended (FR-016) and apply mute state (T042).
     func sync(with window: WindowInfo?) {
         guard let window else {
+            backends.values.forEach { $0.teardown() }
             backends.removeAll()
             return
         }
         let keep = Set(window.tabs.filter { $0.state != "suspended" }.map(\.id))
-        for tabId in backends.keys where !keep.contains(tabId) {
+        for tabId in backends.keys.filter({ !keep.contains($0) }) {
+            backends[tabId]?.teardown()
             backends.removeValue(forKey: tabId)
         }
         for tab in window.tabs {
