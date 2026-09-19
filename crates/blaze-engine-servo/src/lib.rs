@@ -2,7 +2,7 @@
 //! contracts/web-engine-trait.md). T070 scaffold: the full state machine —
 //! navigation staging, history, blocking hooks, suspension, event queue — is
 //! implemented against a pluggable `PageSource`. The `servo` feature swaps in
-//! the real libservo (servo v0.4.0) embedding ([`EmbeddedServoEngine`]) without
+//! the real libservo (servo v0.5.0) embedding ([`EmbeddedServoEngine`]) without
 //! touching the trait surface; golden parity tests (T071) pin the event
 //! contract either way.
 

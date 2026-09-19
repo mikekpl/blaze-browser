@@ -351,8 +351,8 @@ private struct TabItem: View {
     }
 
     private var displayTitle: String {
+        if tab.isEmpty { return "New Tab" }
         if !tab.title.isEmpty { return tab.title }
-        if tab.url == "about:newtab" || tab.url.isEmpty { return "New Tab" }
         return URL(string: tab.url)?.host ?? tab.url
     }
 }

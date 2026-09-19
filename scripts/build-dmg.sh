@@ -22,10 +22,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-VERSION=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')
 DIST=dist
 APP="$DIST/Blaze.app"
-DMG="$DIST/Blaze-$VERSION.dmg"
 
 echo "==> Rust core (universal release)"
 ./scripts/build-xcframework.sh release
@@ -34,18 +32,25 @@ echo "==> Xcode archive (Release)"
 command -v xcodegen >/dev/null || { echo "xcodegen required: brew install xcodegen" >&2; exit 1; }
 (cd platforms/macos && xcodegen generate)
 
-rm -rf "$DIST" && mkdir -p "$DIST"
+# every build has its own version, so earlier DMGs are kept
+rm -rf "$APP" "$DIST/DerivedData" && mkdir -p "$DIST"
 SIGN_ARGS=(CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=YES)
 [[ "$MODE" == "sign" ]] && SIGN_ARGS=(CODE_SIGN_IDENTITY="$IDENTITY")
 
 xcodebuild -project platforms/macos/Blaze.xcodeproj -scheme Blaze \
   -configuration Release -destination 'platform=macOS' \
   -derivedDataPath "$DIST/DerivedData" \
-  MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$VERSION" \
   "${SIGN_ARGS[@]}" build | tail -2
 
 cp -R "$DIST/DerivedData/Build/Products/Release/Blaze.app" "$APP"
 rm -rf "$DIST/DerivedData"
+
+# The build stamped its own unique version (scripts/version.sh); name the DMG
+# after it: MAJOR.MINOR.PATCH+TIMESTAMP, e.g. Blaze-0.7.3+20260919131205.dmg
+SEMVER=$(/usr/libexec/PlistBuddy -c "Print :BlazeSemVer" "$APP/Contents/Info.plist")
+VERSION=$(cut -d. -f1-3 <<< "$SEMVER")
+DMG="$DIST/Blaze-$VERSION.dmg"
+echo "==> Blaze $SEMVER"
 
 if [[ "$MODE" == "sign" ]]; then
   echo "==> Deep signing with: $IDENTITY"

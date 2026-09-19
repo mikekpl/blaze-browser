@@ -173,7 +173,7 @@ final class WebViewStore: ObservableObject {
         backend.tabId = tab.id
         backends[tab.id] = backend
         // Resume content for restored/suspended/reopened tabs.
-        if tab.url != "about:newtab", !tab.url.isEmpty,
+        if !tab.isEmpty,
            let url = bridge.navigate(tabId: tab.id, input: tab.url) {
             backend.navigate(to: url)
         }

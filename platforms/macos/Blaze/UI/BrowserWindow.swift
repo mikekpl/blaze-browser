@@ -42,23 +42,7 @@ struct BrowserWindow: View {
                     BookmarksBar { url in openBookmark(url, backend: backend) }
                     Divider()
                 }
-                ZStack {
-                    WebViewContainer(backend: backend)
-                        .id(backend.tabId) // swap NSView when the active tab changes
-                    if let model = backend.errorPage {
-                        ErrorPageView(model: model) {
-                            backend.errorPage = nil
-                            backend.reload()
-                        }
-                    }
-                }
-                .overlay(alignment: .top) {
-                    if let notice = backend.drmNotice {
-                        DRMNoticeView(message: notice) { backend.drmNotice = nil }
-                            .padding(.top, 12)
-                            .transition(.move(edge: .top).combined(with: .opacity))
-                    }
-                }
+                TabContent(backend: backend, showsNewTabPage: activeTab?.isEmpty ?? true)
             } else {
                 ZStack {
                     Color(nsColor: .underPageBackgroundColor)
@@ -137,8 +121,8 @@ struct BrowserWindow: View {
         let backend = store.backend(for: tab)
         if activeBackend !== backend {
             activeBackend = backend
-            addressText = tab.url == "about:newtab" ? "" : tab.url
-            if tab.url == "about:newtab" || tab.url.isEmpty {
+            addressText = tab.isEmpty ? "" : tab.url
+            if tab.isEmpty {
                 // async: the new tab's toolbar must mount before focus can land
                 DispatchQueue.main.async { addressFocused = true }
             }
@@ -163,6 +147,14 @@ struct BrowserWindow: View {
     }
 
     private func submitAddress() {
+        // about:blank / about:newtab empty the tab rather than being
+        // navigated to (the core rejects the about: scheme as dangerous)
+        if let backend = activeBackend, !addressText.isEmpty,
+           TabInfo.isEmptyURL(addressText) {
+            addressText = ""
+            backend.showBlank()
+            return
+        }
         guard let backend = activeBackend,
               let url = bridge.navigate(tabId: backend.tabId, input: addressText)
         else { return }
@@ -174,6 +166,37 @@ struct BrowserWindow: View {
     private func openBookmark(_ url: String, backend: WebKitBackend) {
         guard let resolved = bridge.navigate(tabId: backend.tabId, input: url) else { return }
         backend.navigate(to: resolved)
+    }
+}
+
+/// The active tab's page area: web view, with the new-tab scenery over an
+/// empty tab and the friendly error page over a failed load. Observes the
+/// backend itself so load/error changes re-render without the whole window.
+private struct TabContent: View {
+    @ObservedObject var backend: WebKitBackend
+    let showsNewTabPage: Bool
+
+    var body: some View {
+        ZStack {
+            WebViewContainer(backend: backend)
+                .id(backend.tabId) // swap NSView when the active tab changes
+            if let model = backend.errorPage {
+                ErrorPageView(model: model) {
+                    backend.errorPage = nil
+                    backend.reload()
+                }
+            } else if showsNewTabPage, !backend.isLoading {
+                NewTabPage(seed: backend.tabId)
+                    .transition(.opacity)
+            }
+        }
+        .overlay(alignment: .top) {
+            if let notice = backend.drmNotice {
+                DRMNoticeView(message: notice) { backend.drmNotice = nil }
+                    .padding(.top, 12)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
     }
 }
 

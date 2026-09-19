@@ -56,12 +56,11 @@ pub fn resolve_input(input: &str, search_template: &str) -> Result<Url, UrlError
     // Bare domain heuristic: no spaces and contains a dot or is localhost.
     let looks_like_host = !input.contains(char::is_whitespace)
         && (input.contains('.') || input.starts_with("localhost"));
-    if looks_like_host {
-        if let Ok(url) = Url::parse(&format!("https://{input}")) {
-            if url.host_str().is_some() {
-                return Ok(url);
-            }
-        }
+    if looks_like_host
+        && let Ok(url) = Url::parse(&format!("https://{input}"))
+        && url.host_str().is_some()
+    {
+        return Ok(url);
     }
 
     // Everything else is a search.

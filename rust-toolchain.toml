@@ -1,4 +1,5 @@
 [toolchain]
-# Pinned to the toolchain servo v0.4.0 is built and tested with.
-channel = "1.95.0"
+# Latest stable. servo v0.5.0 (MSRV 1.88) builds on it and the real-engine
+# smoke test (blaze-engine-servo/tests/embedded_smoke.rs) passes.
+channel = "1.98.1"
 components = ["clippy", "rustfmt"]

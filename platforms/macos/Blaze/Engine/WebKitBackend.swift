@@ -17,6 +17,9 @@ final class WebKitBackend: NSObject, ObservableObject {
     /// Set when the page requests a DRM key system WebKit can't provide (T045).
     @Published var drmNotice: String?
 
+    /// Set by `teardown`: the view is being blanked and must go quiet.
+    private var isTornDown = false
+
     private weak var bridge: CoreBridge?
     private static var compiledRules: WKContentRuleList?
 
@@ -120,8 +123,17 @@ final class WebKitBackend: NSObject, ObservableObject {
     func navigate(to url: URL) {
         errorPage = nil
         drmNotice = nil
+        isLoading = true  // hides the new-tab page before WebKit reports in
         applyCosmetics(for: url)
         webView.load(URLRequest(url: url))
+    }
+
+    /// Empty the tab (`about:blank` typed in the address bar): the commit is
+    /// reported as an empty tab, which shows the new-tab page.
+    func showBlank() {
+        errorPage = nil
+        drmNotice = nil
+        webView.load(URLRequest(url: URL(string: "about:blank")!))
     }
 
     func goBack() { webView.goBack() }
@@ -132,6 +144,10 @@ final class WebKitBackend: NSObject, ObservableObject {
     /// Tab closed/suspended: kill playback (incl. fullscreen/PiP presentations)
     /// and blank the page so no audio/video or decoder memory outlives the tab.
     func teardown() {
+        // The blanking load below must not reach the core: it would overwrite
+        // the tab's URL with about:blank, which the core then refuses to
+        // resume ("dangerous scheme") when the tab is reopened or unsuspended.
+        isTornDown = true
         webView.pauseAllMediaPlayback { [weak webView] in
             webView?.closeAllMediaPresentations {
                 webView?.stopLoading()
@@ -287,17 +303,20 @@ extension WebKitBackend: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
-        if let url = webView.url?.absoluteString {
-            currentURL = url
-            bridge?.notifyCommitted(tabId: tabId, url: url)
-        }
+        guard !isTornDown, let url = webView.url?.absoluteString else { return }
+        // a blank document is an empty tab, never a page to restore
+        let isBlank = url == "about:blank"
+        currentURL = isBlank ? "" : url
+        bridge?.notifyCommitted(tabId: tabId, url: isBlank ? TabInfo.newTabURL : url)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard !isTornDown else { return }
         isLoading = false
-        title = webView.title ?? ""
-        currentURL = webView.url?.absoluteString ?? currentURL
-        bridge?.notifyLoaded(tabId: tabId, title: webView.title, success: true)
+        let isBlank = webView.url?.absoluteString == "about:blank"
+        title = isBlank ? "" : webView.title ?? ""
+        currentURL = isBlank ? "" : webView.url?.absoluteString ?? currentURL
+        bridge?.notifyLoaded(tabId: tabId, title: title, success: true)
     }
 
     func webView(_ webView: WKWebView,
@@ -312,6 +331,7 @@ extension WebKitBackend: WKNavigationDelegate {
 
     /// Friendly error page (T029, FR-005). Cancellations are not errors.
     private func showError(_ error: Error) {
+        guard !isTornDown else { return }
         isLoading = false
         bridge?.notifyLoaded(tabId: tabId, title: nil, success: false)
         let nsError = error as NSError

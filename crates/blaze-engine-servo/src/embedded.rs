@@ -1,4 +1,4 @@
-//! Real libservo (servo v0.4.0) embedding behind the `servo` feature.
+//! Real libservo (servo v0.5.0) embedding behind the `servo` feature.
 //!
 //! `WebEngine` requires `Send`, but libservo's `Servo`/`WebView` handles are
 //! `Rc`-based and must stay on one thread. So each `EmbeddedServoEngine` owns a
@@ -164,7 +164,8 @@ impl WebViewDelegate for Delegate {
                 kind,
             });
             // Intercept and cancel so the request never reaches the network.
-            load.intercept(libservo::WebResourceResponse::new(url)).cancel();
+            load.intercept(libservo::WebResourceResponse::new(url))
+                .cancel();
         }
     }
 }
@@ -212,7 +213,11 @@ impl EmbeddedServoEngine {
     }
 
     pub fn current_url(&self) -> Option<Url> {
-        self.shared.lock().expect("engine state poisoned").url.clone()
+        self.shared
+            .lock()
+            .expect("engine state poisoned")
+            .url
+            .clone()
     }
 
     pub fn is_suspended(&self) -> bool {
@@ -268,14 +273,13 @@ impl WebEngine for EmbeddedServoEngine {
         };
         if changed {
             self.send(Command::SetMuted(muted));
-            self.shared
-                .lock()
-                .expect("engine state poisoned")
-                .push(EngineEvent::AudioStateChanged(if muted {
+            self.shared.lock().expect("engine state poisoned").push(
+                EngineEvent::AudioStateChanged(if muted {
                     AudioState::Muted
                 } else {
                     AudioState::Silent
-                }));
+                }),
+            );
         }
     }
 
@@ -290,7 +294,11 @@ impl WebEngine for EmbeddedServoEngine {
     }
 
     fn poll_title(&self) -> Option<String> {
-        self.shared.lock().expect("engine state poisoned").title.clone()
+        self.shared
+            .lock()
+            .expect("engine state poisoned")
+            .title
+            .clone()
     }
 }
 
@@ -312,78 +320,83 @@ struct EngineThread {
 }
 
 impl EngineThread {
-    fn ensure_webview(&mut self) -> &WebView {
-        if self.webview.is_none() {
-            let user_content_manager = UserContentManager::new(&self.servo);
-            {
-                let artifacts = self.delegate.artifacts.borrow();
-                for scriptlet in &artifacts.scriptlets {
-                    user_content_manager
-                        .add_script(libservo::UserScript::new(scriptlet.source.clone(), None).into());
-                }
-                if !artifacts.cosmetic_css.is_empty() {
-                    user_content_manager.add_script(
-                        libservo::UserScript::new(
-                            inject_css_script(&artifacts.cosmetic_css),
-                            None,
-                        )
-                        .into(),
-                    );
-                }
-            }
-            let webview = WebViewBuilder::new(&self.servo, self.rendering_context.clone())
-                .delegate(self.delegate.clone())
-                .user_content_manager(Rc::new(user_content_manager))
-                .build();
-            webview.focus();
-            self.webview = Some(webview);
+    /// Load `url`, creating the webview on first use. A new webview is built
+    /// *with* the URL: a `load()` issued right after `build()` is dropped in
+    /// favour of the builder's initial `about:blank` document.
+    fn load(&mut self, url: Url) {
+        match &self.webview {
+            Some(webview) => webview.load(url),
+            None => self.webview = Some(self.build_webview(url)),
         }
-        self.webview.as_ref().expect("just created")
+    }
+
+    fn build_webview(&self, url: Url) -> WebView {
+        let user_content_manager = UserContentManager::new(&self.servo);
+        {
+            let artifacts = self.delegate.artifacts.borrow();
+            for scriptlet in &artifacts.scriptlets {
+                user_content_manager
+                    .add_script(libservo::UserScript::new(scriptlet.source.clone(), None).into());
+            }
+            if !artifacts.cosmetic_css.is_empty() {
+                user_content_manager.add_script(
+                    libservo::UserScript::new(inject_css_script(&artifacts.cosmetic_css), None)
+                        .into(),
+                );
+            }
+        }
+        let webview = WebViewBuilder::new(&self.servo, self.rendering_context.clone())
+            .delegate(self.delegate.clone())
+            .user_content_manager(Rc::new(user_content_manager))
+            .url(url)
+            .build();
+        webview.focus();
+        webview
     }
 
     fn handle(&mut self, command: Command) -> bool {
         match command {
-            Command::Wake => {},
-            Command::Navigate(url) => self.ensure_webview().load(url),
+            Command::Wake => {}
+            Command::Navigate(url) => self.load(url),
             Command::GoBack => {
                 if let Some(webview) = &self.webview {
                     webview.go_back(1);
                 }
-            },
+            }
             Command::GoForward => {
                 if let Some(webview) = &self.webview {
                     webview.go_forward(1);
                 }
-            },
+            }
             Command::Reload => {
                 if let Some(webview) = &self.webview {
                     webview.reload();
                 }
-            },
+            }
             Command::ApplyBlocking(artifacts) => {
                 // Network gating applies immediately; scriptlets/CSS are baked
                 // into the UserContentManager of the next webview (suspend →
                 // resume or first navigate), matching "next load" semantics.
                 *self.delegate.artifacts.borrow_mut() = artifacts;
-            },
+            }
             Command::SetMuted(muted) => {
                 if let Some(webview) = &self.webview {
                     webview.evaluate_javascript(mute_script(muted), |_| {});
                 }
-            },
+            }
             Command::Suspend => {
                 // Dropping the last handle tears the webview down (FR-016).
                 self.webview = None;
-            },
+            }
             Command::Resume(url) => {
                 self.webview = None;
-                self.ensure_webview().load(url);
-            },
+                self.load(url);
+            }
             Command::Resize(width, height) => {
                 if let Some(webview) = &self.webview {
                     webview.resize(dpi::PhysicalSize::new(width, height));
                 }
-            },
+            }
             Command::Frame(reply) => {
                 let frame = self.webview.as_ref().and_then(|webview| {
                     webview.paint();
@@ -393,7 +406,7 @@ impl EngineThread {
                         .map(|image| (image.width(), image.height(), image.into_raw()))
                 });
                 let _ = reply.send(frame);
-            },
+            }
             Command::Shutdown => return false,
         }
         true
@@ -415,11 +428,14 @@ fn run_engine_thread(
     )) {
         Ok(context) => Rc::new(context),
         Err(error) => {
-            shared.lock().expect("engine state poisoned").push(EngineEvent::Crashed {
-                reason: format!("failed to create rendering context: {error:?}"),
-            });
+            shared
+                .lock()
+                .expect("engine state poisoned")
+                .push(EngineEvent::Crashed {
+                    reason: format!("failed to create rendering context: {error:?}"),
+                });
             return;
-        },
+        }
     };
 
     let servo = ServoBuilder::default()
@@ -446,8 +462,8 @@ fn run_engine_thread(
                 if !thread.handle(command) {
                     break;
                 }
-            },
-            Err(RecvTimeoutError::Timeout) => {},
+            }
+            Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }
         thread.servo.spin_event_loop();
@@ -459,9 +475,7 @@ fn run_engine_thread(
 }
 
 fn mute_script(muted: bool) -> String {
-    format!(
-        "document.querySelectorAll('audio,video').forEach(m => m.muted = {muted});"
-    )
+    format!("document.querySelectorAll('audio,video').forEach(m => m.muted = {muted});")
 }
 
 fn inject_css_script(css: &str) -> String {

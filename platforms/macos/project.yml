@@ -27,9 +27,20 @@ targets:
     dependencies:
       - framework: Generated/BlazeFFI.xcframework
         embed: false
+    # Every build gets its own semver (scripts/version.sh), stamped into the
+    # built Info.plist before code signing.
+    postBuildScripts:
+      - name: Stamp build version
+        script: '"$SRCROOT/../../scripts/version.sh" --stamp "$TARGET_BUILD_DIR/$INFOPLIST_PATH"'
+        basedOnDependencyAnalysis: false
+        # orders the phase after Xcode has generated the plist (clean builds)
+        inputFiles:
+          - $(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.blaze.Blaze
+        # the stamp phase runs git and edits the built plist
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
         INFOPLIST_KEY_NSHumanReadableCopyright: ""
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.productivity
         GENERATE_INFOPLIST_FILE: YES

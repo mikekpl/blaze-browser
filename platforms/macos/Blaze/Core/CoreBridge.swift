@@ -25,6 +25,20 @@ struct TabInfo: Identifiable, Equatable {
     var audioState: String  // silent | audible | muted
 }
 
+extension TabInfo {
+    static let newTabURL = "about:newtab"
+
+    /// Nothing to load: a fresh tab, or one left on a blank document. Shown
+    /// as the new-tab page and never sent through navigation (the core
+    /// rejects the `about:` scheme).
+    var isEmpty: Bool { Self.isEmptyURL(url) }
+
+    static func isEmptyURL(_ url: String) -> Bool {
+        let url = url.trimmingCharacters(in: .whitespaces).lowercased()
+        return url.isEmpty || url == newTabURL || url == "about:blank"
+    }
+}
+
 /// One window (ordered tabs + focus) mirrored from the core.
 struct WindowInfo: Identifiable, Equatable {
     let id: String
