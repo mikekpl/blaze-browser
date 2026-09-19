@@ -9,7 +9,7 @@ struct BrowserWindow: View {
     @Environment(\.openWindow) private var openWindow
     /// Specific core window to bind (drag-out / restored extras); nil = claim any.
     let requestedWindowId: String?
-    @StateObject private var store: WebViewStore
+    private let store = WebViewStore.shared
     @State private var windowId: String?
     @State private var activeBackend: WebKitBackend?
     @State private var addressText: String = ""
@@ -18,7 +18,6 @@ struct BrowserWindow: View {
 
     init(requestedWindowId: String? = nil) {
         self.requestedWindowId = requestedWindowId
-        _store = StateObject(wrappedValue: WebViewStore(bridge: CoreBridge.shared))
     }
 
     private var window: WindowInfo? { bridge.browserState.window(windowId) }
@@ -72,7 +71,7 @@ struct BrowserWindow: View {
         .ignoresSafeArea(.all, edges: .top)  // fill under transparent titlebar (fullSizeContentView)
         .frame(minWidth: 600, minHeight: 400)
         .overlay(alignment: .bottom) { popupNotice }
-        .background(WindowAccessor(window: $hostWindow))
+        .background(WindowAccessor(window: $hostWindow, windowId: requestedWindowId))
         .onAppear(perform: bindWindow)
         .onChange(of: bridge.browserState) { _ in syncWithState() }
         .onChange(of: hostWindow) { win in
@@ -120,8 +119,8 @@ struct BrowserWindow: View {
         addressFocused = true
     }
 
-    /// Reconcile web views with core state: resume the active tab if it was
-    /// suspended, drop web views for suspended/closed tabs (FR-016).
+    /// Reconcile with core state: show the active tab's web view, resuming it
+    /// if it was suspended. `WebViewStore` reaps closed/suspended ones (FR-016).
     private func syncWithState() {
         // last tab closed → core window is gone; close the AppKit window too
         if let windowId, bridge.browserState.window(windowId) == nil {
@@ -131,7 +130,6 @@ struct BrowserWindow: View {
         if let windowId, let hostWindow {
             WindowManager.registerHost(hostWindow, for: windowId)
         }
-        store.sync(with: window)
         guard let tab = activeTab else {
             activeBackend = nil
             return
@@ -182,9 +180,12 @@ struct BrowserWindow: View {
 /// Captures the hosting NSWindow and configures it for a Chrome-style full-height tab strip.
 private struct WindowAccessor: NSViewRepresentable {
     @Binding var window: NSWindow?
+    /// Known up front only for drag-out / restored windows.
+    let windowId: String?
 
     func makeNSView(context: Context) -> NSView {
-        let view = NSView()
+        let view = _View()
+        view.windowId = windowId
         DispatchQueue.main.async { configure(view.window) }
         return view
     }
@@ -201,5 +202,16 @@ private struct WindowAccessor: NSViewRepresentable {
         win.titleVisibility = .hidden
         win.isMovable = false
         window = win
+    }
+
+    final class _View: NSView {
+        var windowId: String?
+        // a window torn off by a tab drag opens where the tab was dropped
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let window, let windowId {
+                WindowManager.applyPendingFrame(to: window, windowId: windowId)
+            }
+        }
     }
 }

@@ -391,10 +391,46 @@ extension WebKitBackend: WKUIDelegate {
     }
 }
 
-/// SwiftUI wrapper for the backing WKWebView.
+/// SwiftUI wrapper for the backing WKWebView. The web view is hosted inside a
+/// plain container instead of being returned directly: a tab dragged to
+/// another window re-parents the same WKWebView, and the window it left must
+/// not yank it back out while SwiftUI dismantles the old container.
 struct WebViewContainer: NSViewRepresentable {
     @ObservedObject var backend: WebKitBackend
 
-    func makeNSView(context: Context) -> WKWebView { backend.webView }
-    func updateNSView(_ nsView: WKWebView, context: Context) {}
+    func makeNSView(context: Context) -> WebViewHost {
+        let host = WebViewHost()
+        host.adopt(backend.webView)
+        return host
+    }
+
+    func updateNSView(_ nsView: WebViewHost, context: Context) {
+        // Never steal it back from another window's host: a stale update pass
+        // in the window the tab just left would blank the tab's new home.
+        if backend.webView.superview == nil { nsView.adopt(backend.webView) }
+    }
+
+    static func dismantleNSView(_ nsView: WebViewHost, coordinator: ()) {
+        nsView.releaseWebView()
+    }
+}
+
+final class WebViewHost: NSView {
+    private weak var hosted: WKWebView?
+
+    func adopt(_ webView: WKWebView) {
+        hosted = webView
+        guard webView.superview !== self else { return }
+        webView.removeFromSuperview()
+        webView.frame = bounds
+        webView.autoresizingMask = [.width, .height]
+        addSubview(webView)
+    }
+
+    /// Let go only if the web view is still ours — it may already live in
+    /// another window's host.
+    func releaseWebView() {
+        if let hosted, hosted.superview === self { hosted.removeFromSuperview() }
+        hosted = nil
+    }
 }

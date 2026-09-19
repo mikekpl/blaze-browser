@@ -3,6 +3,7 @@ import AppKit
 
 struct TabStrip: View {
     @EnvironmentObject private var bridge: CoreBridge
+    @ObservedObject private var drag = TabDragSession.shared
     let windowId: String
     @State private var plusHovering = false
     @State private var draggingTabId: String?
@@ -13,9 +14,19 @@ struct TabStrip: View {
     private var tabs: [TabInfo] { window?.tabs ?? [] }
     private static let reservedChromeWidth: CGFloat = 72 + 22 + 8 + 4 * 3
     
+    /// Tabs as laid out right now: a tab being dragged out of the window has
+    /// already given up its slot, a tab hovering in from another has one open.
     private var tabsContentWidth: CGFloat {
-        tabs.reduce(CGFloat(8)) { $0 + ($1.pinned ? 36 : 220) }
-            + CGFloat(max(0, tabs.count - 1)) * 4
+        let staying = tabs.filter { !drag.isLeaving($0.id) }
+        var width = staying.reduce(CGFloat(8)) { $0 + TabStripLayout.width(of: $1) }
+            + CGFloat(max(0, staying.count - 1)) * TabStripLayout.spacing
+        if let incoming { width += incoming.width + TabStripLayout.spacing }
+        return width
+    }
+
+    /// Drop target when a tab from another window hovers over this strip.
+    private var incoming: TabDragSession.DropTarget? {
+        drag.dropTarget.flatMap { $0.windowId == windowId ? $0 : nil }
     }
 
     var body: some View {
@@ -27,12 +38,16 @@ struct TabStrip: View {
             ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 4) {
-                        ForEach(tabs) { tab in
+                        ForEach(Array(tabs.enumerated()), id: \.element.id) { index, tab in
                             TabItem(
                                 tab: tab,
                                 isActive: window?.activeTabId == tab.id,
                                 windowId: windowId,
+                                isLeaving: drag.isLeaving(tab.id),
                                 draggingTabId: $draggingTabId)
+                                // make room for a tab hovering in from another window
+                                .offset(x: incoming.map { index >= $0.slot
+                                    ? $0.width + TabStripLayout.spacing : 0 } ?? 0)
                                 .id(tab.id)
                         }
                     }
@@ -40,6 +55,7 @@ struct TabStrip: View {
                     .padding(.horizontal, 4)
                     .padding(.vertical, 3)
                     .coordinateSpace(name: "TabStrip")
+                    .overlay(alignment: .leading) { incomingSlot }
                 }
                 .onChange(of: window?.activeTabId) { active in
                     if let active {
@@ -91,6 +107,21 @@ struct TabStrip: View {
         }
     }
 
+    /// The opened gap where a tab dragged in from another window will land.
+    @ViewBuilder private var incomingSlot: some View {
+        if let incoming {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color.accentColor.opacity(0.12))
+                .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(Color.accentColor.opacity(0.7),
+                                  style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])))
+                .frame(width: incoming.width, height: TabStripLayout.tabHeight)
+                .offset(x: TabStripLayout.minX(at: incoming.slot, in: tabs))
+                .allowsHitTesting(false)
+                .transition(.opacity)
+        }
+    }
+
     /// ⌘←/⌘→ re-arranges the active tab; skipped while editing text so the
     /// address bar keeps its line-start/line-end behavior.
     private func installKeyMonitor() {
@@ -124,27 +155,30 @@ private struct TabItem: View {
     let tab: TabInfo
     let isActive: Bool
     let windowId: String
+    /// Mid-drag and releasing now would move the tab out of this window:
+    /// it gives up its slot so the strip shows what's about to happen.
+    let isLeaving: Bool
     @Binding var draggingTabId: String?
     @State private var isHovering = false
     @State private var grabOffsetX: CGFloat = 0
-    @State private var dragOffsetX: CGFloat = 0
-    @State private var isDetaching = false
 
-    private static let detachDistance: CGFloat = 48
-
+    private var drag: TabDragSession { .shared }
     private var isDragging: Bool { draggingTabId == tab.id }
     private var window: WindowInfo? { bridge.browserState.window(windowId) }
     private var tabIndex: Int? { window?.tabs.firstIndex { $0.id == tab.id } }
     private var tabCount: Int { window?.tabs.count ?? 0 }
-    // fixed widths — pinned tabs show only favicon
-    private var tabWidth: CGFloat { tab.pinned ? 36 : 220 }
+    private var tabWidth: CGFloat { TabStripLayout.width(of: tab) }
+    /// Like DuckDuckGo: pinned tabs only reorder, and a window's only tab
+    /// can join another window but can't be torn off into a new one.
+    private var canLeaveWindow: Bool { !tab.pinned }
+    private var canOpenNewWindow: Bool { !tab.pinned && tabCount > 1 }
 
     var body: some View {
         HStack(spacing: 5) {
             if tab.pinned {
-                favicon.frame(maxWidth: .infinity)
+                TabFavicon(pageURL: tab.url).frame(maxWidth: .infinity)
             } else {
-                favicon
+                TabFavicon(pageURL: tab.url)
             }
             if !tab.pinned, tab.audioState == "audible" || tab.audioState == "muted" {
                 Button {
@@ -193,11 +227,13 @@ private struct TabItem: View {
                         radius: 2, y: 1))
         .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         .background(WindowDragBlocker())
-        .offset(x: isDragging ? dragOffsetX : 0)
-        .scaleEffect(isDragging ? 1.02 : 1)
-        .shadow(color: isDragging ? .black.opacity(0.25) : .clear, radius: 8, y: 3)
-        .opacity(isDetaching ? 0.6 : 1)
-        .zIndex(isDragging ? 1 : 0)
+        // the floating snapshot carries the drag; the real tab holds its slot
+        // until it is headed out of the window, then folds away (the view
+        // stays mounted — it owns the gesture)
+        .opacity(isLeaving ? 0 : isDragging ? 0.6 : 1)
+        .frame(width: isLeaving ? 0 : tabWidth, alignment: .leading)
+        .clipped()
+        .padding(.trailing, isLeaving ? -TabStripLayout.spacing : 0)
         .animation(.easeOut(duration: 0.15), value: isActive)
         .animation(.easeOut(duration: 0.12), value: isHovering)
         .onHover { hovering in isHovering = hovering }
@@ -211,7 +247,7 @@ private struct TabItem: View {
                 bridge.setMuted(tab.id, muted: tab.audioState != "muted")
             }
             Divider()
-            Button("Move Tab to New Window") { popOut() }
+            Button("Move Tab to New Window") { popOut(at: nil) }
             .disabled(tabCount < 2)
             Divider()
             Button("Reopen Closed Tab") {
@@ -235,82 +271,81 @@ private struct TabItem: View {
                     draggingTabId = tab.id
                     bridge.activateTab(tab.id)
                     grabOffsetX = value.startLocation.x
-                        - minX(at: tabIndex ?? 0, in: window.tabs)
+                        - TabStripLayout.minX(at: tabIndex ?? 0, in: window.tabs)
+                    let grabY = value.startLocation.y - TabStripLayout.verticalPadding
+                    drag.begin(tab: tab, title: displayTitle, grabOffset: CGSize(
+                        width: min(max(grabOffsetX, 0), tabWidth),
+                        height: min(max(grabY, 0), TabStripLayout.tabHeight)))
                 }
-                let desiredMinX = value.location.x - grabOffsetX
-                let target = slotIndex(forCenter: desiredMinX + tabWidth / 2,
-                                       in: window.tabs)
-                if let index = tabIndex, target != index {
-                    withAnimation(.interactiveSpring(response: 0.28, dampingFraction: 0.72)) {
-                        bridge.reorderTab(tab.id, to: target)
+                guard !drag.isCancelled else { return }
+                let mouse = NSEvent.mouseLocation
+                let mergeTarget = canLeaveWindow ? mergeTarget(at: mouse) : nil
+                // live reorder only while the pointer rides this window's strip
+                if mergeTarget == nil,
+                   WindowManager.isOverStrip(ofWindow: windowId, atScreenPoint: mouse) {
+                    let center = value.location.x - grabOffsetX + tabWidth / 2
+                    let target = TabStripLayout.slotIndex(forCenter: center, in: window.tabs)
+                    if let index = tabIndex, target != index {
+                        withAnimation(.interactiveSpring(response: 0.28, dampingFraction: 0.72)) {
+                            bridge.reorderTab(tab.id, to: target)
+                        }
                     }
                 }
-                // recompute against post-reorder state so the tab keeps tracking the pointer
-                if let tabs = self.window?.tabs, let index = tabIndex {
-                    dragOffsetX = desiredMinX - minX(at: index, in: tabs)
+                if let mergeTarget {
+                    drag.update(mouse: mouse, phase: .merging(.init(
+                        windowId: mergeTarget.windowId, slot: mergeTarget.slot, width: tabWidth)))
+                } else {
+                    drag.update(mouse: mouse, phase: isTearOff(at: mouse) ? .tearingOff : .reordering)
                 }
-                let overOtherStrip = WindowManager.mergeTarget(
-                    atScreenPoint: NSEvent.mouseLocation, excluding: windowId) != nil
-                isDetaching = overOtherStrip
-                    || abs(value.translation.height) > Self.detachDistance
             }
-            .onEnded { value in
-                let shouldDetach = abs(value.translation.height) > Self.detachDistance
-                    && tabCount > 1
-                let mergeTarget = WindowManager.mergeTarget(
-                    atScreenPoint: NSEvent.mouseLocation, excluding: windowId)
-                withAnimation(.interactiveSpring(response: 0.28, dampingFraction: 0.72)) {
-                    dragOffsetX = 0
-                    isDetaching = false
-                }
+            .onEnded { _ in
+                let mouse = NSEvent.mouseLocation
+                let cancelled = drag.isCancelled
+                // decide with the session's geometry before it is torn down
+                let mergeTarget = canLeaveWindow ? mergeTarget(at: mouse) : nil
+                let newWindowTopLeft = mergeTarget == nil && isTearOff(at: mouse)
+                    ? drag.windowTopLeft(forMouse: mouse) : nil
+                drag.end()
                 draggingTabId = nil
+                guard !cancelled else { return }
                 if let mergeTarget {
                     merge(into: mergeTarget)
-                } else if shouldDetach {
-                    popOut()
+                } else if let newWindowTopLeft {
+                    popOut(at: newWindowTopLeft)
                 }
             }
     }
 
-    /// Move the tab into another window's strip at the drop position and
-    /// bring that window to front; an emptied source window closes itself.
-    private func merge(into target: (windowId: String, nsWindow: NSWindow, xInStrip: CGFloat)) {
-        let destTabs = bridge.browserState.window(target.windowId)?.tabs ?? []
-        // past the last tab → append
-        let endX = minX(at: destTabs.count, in: destTabs)
-        let slot = target.xInStrip >= endX
-            ? destTabs.count
-            : slotIndex(forCenter: target.xInStrip, in: destTabs)
-        bridge.moveTab(tab.id, toWindow: target.windowId, position: slot)
+    private func mergeTarget(at mouse: NSPoint)
+        -> (windowId: String, nsWindow: NSWindow, slot: Int)? {
+        WindowManager.mergeTarget(
+            atScreenPoint: mouse, tabCenterX: drag.tabCenterX(forMouse: mouse),
+            excluding: windowId, bridge: bridge)
+    }
+
+    /// Releasing at `mouse` would open this tab in a new window.
+    private func isTearOff(at mouse: NSPoint) -> Bool {
+        canOpenNewWindow
+            && !WindowManager.isOverStrip(ofWindow: windowId, atScreenPoint: mouse)
+            && WindowManager.isTearOffPoint(mouse, fromWindow: windowId)
+    }
+
+    /// Move the tab into another window's strip at the drop slot and bring
+    /// that window to front. The core closes a source window left empty and
+    /// the tab's live web view follows it (see `WebViewStore`).
+    private func merge(into target: (windowId: String, nsWindow: NSWindow, slot: Int)) {
+        withAnimation(.interactiveSpring(response: 0.28, dampingFraction: 0.72)) {
+            bridge.moveTab(tab.id, toWindow: target.windowId, position: target.slot)
+        }
         bridge.activateTab(tab.id)
         target.nsWindow.makeKeyAndOrderFront(nil)
-        if let source = bridge.browserState.window(windowId), source.tabs.isEmpty {
-            bridge.closeWindow(windowId)
-        }
     }
 
-    /// Leading x of the tab slot at `index` in strip coordinates.
-    private func minX(at index: Int, in tabs: [TabInfo]) -> CGFloat {
-        var x: CGFloat = 4  // strip leading padding
-        for i in 0..<min(index, tabs.count) {
-            x += (tabs[i].pinned ? CGFloat(36) : CGFloat(220)) + 4
-        }
-        return x
-    }
-
-    /// Slot whose bounds contain `centerX`.
-    private func slotIndex(forCenter centerX: CGFloat, in tabs: [TabInfo]) -> Int {
-        var x: CGFloat = 4
-        for (i, t) in tabs.enumerated() {
-            let width = (t.pinned ? CGFloat(36) : CGFloat(220)) + 4
-            if centerX < x + width { return i }
-            x += width
-        }
-        return max(0, tabs.count - 1)
-    }
-
-    private func popOut() {
-        guard let newWindowId = WindowManager.moveTabToNewWindow(tab.id, bridge: bridge)
+    /// Tear the tab off into its own window — where the drag preview showed
+    /// it, otherwise wherever the system places new windows.
+    private func popOut(at topLeft: NSPoint?) {
+        guard let newWindowId = WindowManager.moveTabToNewWindow(
+            tab.id, bridge: bridge, topLeft: topLeft, sourceWindowId: windowId)
         else { return }
         openWindow(value: newWindowId)
     }
@@ -319,31 +354,6 @@ private struct TabItem: View {
         if !tab.title.isEmpty { return tab.title }
         if tab.url == "about:newtab" || tab.url.isEmpty { return "New Tab" }
         return URL(string: tab.url)?.host ?? tab.url
-    }
-
-    /// Site favicon fetched from /favicon.ico (same-origin, no third parties).
-    @ViewBuilder private var favicon: some View {
-        if let url = faviconURL {
-            AsyncImage(url: url) { phase in
-                if let image = phase.image {
-                    image.resizable().interpolation(.medium)
-                } else {
-                    Image(systemName: "globe")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .frame(width: 14, height: 14)
-            .clipShape(RoundedRectangle(cornerRadius: 3))
-        }
-    }
-
-    private var faviconURL: URL? {
-        guard let url = URL(string: tab.url),
-              let scheme = url.scheme, scheme.hasPrefix("http"),
-              let host = url.host
-        else { return nil }
-        return URL(string: "\(scheme)://\(host)/favicon.ico")
     }
 }
 
