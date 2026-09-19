@@ -129,20 +129,37 @@ struct BrowserWindow: View {
         }
     }
 
-    /// Transient popup-blocked notice (T030), auto-dismissing.
+    /// Transient blocked-popup/redirect notice (T030), auto-dismissing. Only
+    /// the window the attempt came from shows it, and it never takes focus;
+    /// "Open" is the one way a blocked popup gets to open — the user's call.
     @ViewBuilder private var popupNotice: some View {
-        if let notice = bridge.popupNotice {
-            Text(notice)
-                .font(.callout)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(.regularMaterial, in: Capsule())
-                .padding(.bottom, 16)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-                .task {
-                    try? await Task.sleep(nanoseconds: 3_000_000_000)
-                    bridge.popupNotice = nil
+        if let notice = bridge.popupNotice,
+           notice.tabId.isEmpty || window?.tabs.contains(where: { $0.id == notice.tabId }) == true {
+            HStack(spacing: 10) {
+                Image(systemName: "hand.raised.fill")
+                    .foregroundStyle(.secondary)
+                Text(notice.message)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if let url = notice.url {
+                    Button("Open") {
+                        bridge.popupNotice = nil
+                        bridge.createTab(nextTo: notice.tabId, url: url)
+                    }
+                    .buttonStyle(.link)
                 }
+            }
+            .font(.callout)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(.regularMaterial, in: Capsule())
+            .frame(maxWidth: 520)
+            .padding(.bottom, 16)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .task(id: notice) {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                if bridge.popupNotice == notice { bridge.popupNotice = nil }
+            }
         }
     }
 

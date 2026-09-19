@@ -19,6 +19,9 @@ final class WebKitBackend: NSObject, ObservableObject {
 
     /// Set by `teardown`: the view is being blanked and must go quiet.
     private var isTornDown = false
+    /// A load the user asked for (address bar, bookmark, resume) is on its
+    /// way: the one script-looking main-frame load never second-guessed.
+    private var isUserLoadPending = false
 
     private weak var bridge: CoreBridge?
     private static var compiledRules: WKContentRuleList?
@@ -124,6 +127,7 @@ final class WebKitBackend: NSObject, ObservableObject {
         errorPage = nil
         drmNotice = nil
         isLoading = true  // hides the new-tab page before WebKit reports in
+        isUserLoadPending = true
         applyCosmetics(for: url)
         webView.load(URLRequest(url: url))
     }
@@ -260,6 +264,12 @@ extension WebKitBackend: WKNavigationDelegate {
             return
         }
         let isMainFrame = navigationAction.targetFrame?.isMainFrame ?? true
+        if isMainFrame, let hijack = hijackVerdict(for: navigationAction, url: url) {
+            // The page stays exactly as it is; at most a quiet notice.
+            decisionHandler(.cancel)
+            if let message = hijack.notice { notify(message, url: hijack.offerURL) }
+            return
+        }
         if !isMainFrame {
             // Native-matcher fallback for subframe documents (T026).
             let source = webView.url?.absoluteString ?? ""
@@ -274,6 +284,79 @@ extension WebKitBackend: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         isLoading = true
+    }
+
+    // MARK: Tab-hijack resistance
+
+    private struct HijackVerdict {
+        var notice: String?
+        var offerURL: URL?
+    }
+
+    /// Decide whether a main-frame navigation is the page (or an ad inside
+    /// it) trying to drag the tab somewhere the user didn't ask to go.
+    /// Returns nil for navigations that should proceed.
+    private func hijackVerdict(for action: WKNavigationAction, url: URL) -> HijackVerdict? {
+        // stays set across the load's server redirects; cleared on commit/failure
+        if isUserLoadPending { return nil }
+        let scheme = url.scheme?.lowercased() ?? ""
+        let userDriven = action.navigationType == .linkActivated
+            || action.navigationType == .formSubmitted
+            || action.navigationType == .formResubmitted
+        let isWeb = ["http", "https", "about", "blob", "data"].contains(scheme)
+
+        // App-store / dialer / custom-scheme bounces: hand real clicks to the
+        // system, drop scripted ones. Either way the tab doesn't move (and
+        // WebKit doesn't get to fail the load into an error page).
+        if !isWeb {
+            if userDriven, ["mailto", "tel", "facetime", "sms"].contains(scheme) {
+                NSWorkspace.shared.open(url)
+            }
+            return HijackVerdict()
+        }
+        if action.navigationType == .backForward || action.navigationType == .reload {
+            return nil
+        }
+
+        let pageURL = webView.url
+        let host = url.host ?? url.absoluteString
+        // An embedded frame (where ads live) scripting the top window away to
+        // another site. Back to the page's own site is fine — that's how
+        // embedded checkouts and sign-ins hand control back.
+        if !userDriven, let source = Self.sourceFrame(of: action), !source.isMainFrame,
+           !Self.sameSite(url.host, pageURL?.host) {
+            return HijackVerdict(notice: "Redirect blocked: \(host)", offerURL: url)
+        }
+        // A scripted redirect to a filter-listed destination on another site.
+        // Links the user clicks are left alone: list rules also match plenty
+        // of places people go on purpose.
+        if !userDriven, let pageURL, !Self.sameSite(url.host, pageURL.host),
+           bridge?.shouldBlock(tabId: tabId, url: url.absoluteString,
+                               sourceURL: pageURL.absoluteString, kind: "document") == true {
+            return HijackVerdict(notice: "Ad redirect blocked: \(host)", offerURL: nil)
+        }
+        return nil
+    }
+
+    /// Same registrable domain, approximated by the last two host labels.
+    private static func sameSite(_ a: String?, _ b: String?) -> Bool {
+        guard let a, let b else { return false }
+        let site = { (host: String) in
+            host.lowercased().split(separator: ".").suffix(2).joined(separator: ".")
+        }
+        return site(a) == site(b)
+    }
+
+    /// `sourceFrame` is declared non-optional but WebKit hands back nil for
+    /// some navigations; reading it through Swift's bridge would trap.
+    private static func sourceFrame(of action: WKNavigationAction) -> WKFrameInfo? {
+        action.perform(#selector(getter: WKNavigationAction.sourceFrame))?
+            .takeUnretainedValue() as? WKFrameInfo
+    }
+
+    private func notify(_ message: String, url: URL?) {
+        let notice = PopupNotice(message: message, url: url?.absoluteString, tabId: tabId)
+        DispatchQueue.main.async { [weak self] in self?.bridge?.popupNotice = notice }
     }
 
     /// Route non-renderable responses (attachments, binaries) into the
@@ -303,6 +386,7 @@ extension WebKitBackend: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        isUserLoadPending = false
         guard !isTornDown, let url = webView.url?.absoluteString else { return }
         // a blank document is an empty tab, never a page to restore
         let isBlank = url == "about:blank"
@@ -331,11 +415,16 @@ extension WebKitBackend: WKNavigationDelegate {
 
     /// Friendly error page (T029, FR-005). Cancellations are not errors.
     private func showError(_ error: Error) {
+        isUserLoadPending = false
         guard !isTornDown else { return }
         isLoading = false
         bridge?.notifyLoaded(tabId: tabId, title: nil, success: false)
         let nsError = error as NSError
         if nsError.code == NSURLErrorCancelled { return }
+        // Loads we refused by policy (blocked redirects, downloads, app-scheme
+        // bounces) are not failures of the page the user is looking at.
+        if nsError.domain == "WebKitErrorDomain", nsError.code == 102 { return }
+        if nsError.code == NSURLErrorUnsupportedURL { return }
         errorPage = ErrorPageModel(
             url: currentURL,
             message: friendlyMessage(for: nsError))
@@ -393,19 +482,33 @@ extension WebKitBackend: WKUIDelegate {
         }
     }
 
-    /// Popup blocking (T030, US1-AC5): never create implicit web views.
+    /// Popup blocking (T030, US1-AC5): never create implicit web views, and
+    /// never let a popup touch the tab it came from — no navigating it to the
+    /// popup's URL, no focus change, no new foreground tab.
+    ///  - filter-listed destination → dropped;
+    ///  - a link the user clicked (`target="_blank"`) → background tab;
+    ///  - script-opened window (popunders, click hijacks — but also sign-in
+    ///    popups) → blocked, with an "Open" offer in the notice.
     func webView(_ webView: WKWebView,
                  createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction,
                  windowFeatures: WKWindowFeatures) -> WKWebView? {
-        if let url = navigationAction.request.url {
-            if navigationAction.targetFrame == nil {
-                // Open user-initiated link targets in the same view instead of a popup.
-                webView.load(URLRequest(url: url))
-            }
-            DispatchQueue.main.async { [weak self] in
-                self?.bridge?.popupNotice = "Popup blocked: \(url.host ?? url.absoluteString)"
-            }
+        guard let url = navigationAction.request.url,
+              let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https"
+        else {
+            notify("Popup blocked", url: nil)
+            return nil
+        }
+        let host = url.host ?? url.absoluteString
+        let source = webView.url?.absoluteString ?? ""
+        if bridge?.shouldBlock(tabId: tabId, url: url.absoluteString,
+                               sourceURL: source, kind: "document") == true {
+            notify("Ad popup blocked: \(host)", url: url)
+        } else if navigationAction.navigationType == .linkActivated {
+            bridge?.createBackgroundTab(nextTo: tabId, url: url.absoluteString)
+            notify("Opened in a background tab: \(host)", url: nil)
+        } else {
+            notify("Popup blocked: \(host)", url: url)
         }
         return nil
     }

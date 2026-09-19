@@ -25,6 +25,16 @@ struct TabInfo: Identifiable, Equatable {
     var audioState: String  // silent | audible | muted
 }
 
+/// Something a page tried to do that Blaze stopped, shown as a transient
+/// notice. Never interrupts the tab; `url` lets the user opt in afterwards.
+struct PopupNotice: Equatable {
+    let message: String
+    /// Blocked destination the user may still open deliberately.
+    var url: String?
+    /// Tab the attempt came from (the new tab opens next to it).
+    var tabId: String = ""
+}
+
 extension TabInfo {
     static let newTabURL = "about:newtab"
 
@@ -104,7 +114,7 @@ final class CoreBridge: ObservableObject {
     /// Last blocked navigation (tab, url, reason) → error page (FR-005).
     @Published var blockedNavigation: (url: String, reason: String)?
     /// Transient popup-blocked notice (US1-AC5).
-    @Published var popupNotice: String?
+    @Published var popupNotice: PopupNotice?
     @Published private(set) var adblockReady = false
     /// Mirror of the core's full window/tab tree (T033/T036).
     @Published private(set) var browserState = BrowserState()
@@ -248,6 +258,37 @@ final class CoreBridge: ObservableObject {
             report(error)
             return nil
         }
+    }
+
+    /// Open `url` in a new tab of `tabId`'s window without taking focus: the
+    /// tab the user is on stays put (links a page opens in a new window).
+    /// The core always focuses a new tab, so focus is handed straight back
+    /// before the UI sees any state.
+    @discardableResult
+    func createBackgroundTab(nextTo tabId: String, url: String) -> String? {
+        guard let core,
+              let window = browserState.windows.first(where: { w in
+                  w.tabs.contains { $0.id == tabId }
+              })
+        else { return nil }
+        do {
+            let newTab = try core.createTab(windowId: window.id, url: url)
+            try? core.activateTab(tabId: window.activeTabId)
+            refreshState()
+            enforceTabSuspension()
+            return newTab
+        } catch {
+            report(error)
+            return nil
+        }
+    }
+
+    /// Open `url` in a new focused tab next to `tabId` (explicit user action).
+    func createTab(nextTo tabId: String, url: String) {
+        guard let window = browserState.windows.first(where: { w in
+            w.tabs.contains { $0.id == tabId }
+        }) else { return }
+        createTab(windowId: window.id, url: url)
     }
 
     func closeTab(_ tabId: String) {
