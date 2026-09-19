@@ -342,12 +342,15 @@ impl TabManager {
     }
 
     /// Tabs to suspend under LRU pressure: `Active`-state, unpinned,
-    /// not window-active, least recently used first, beyond `keep`.
+    /// not window-active, not playing, least recently used first, beyond
+    /// `keep`. A background tab with audible playback (music, a video in
+    /// another window, a call) is in use however long ago it was activated.
     pub fn lru_suspension_candidates(&self, keep: usize) -> Vec<TabId> {
         let mut eligible: Vec<&Tab> = self
             .tabs
             .values()
             .filter(|t| t.state == TabState::Active && !t.pinned)
+            .filter(|t| t.audio_state != AudioState::Audible)
             .filter(|t| {
                 self.windows
                     .get(&t.window_id)
@@ -482,6 +485,29 @@ mod tests {
         let (w, t) = m.create_window(frame());
         assert_eq!(m.window(&w).unwrap().active_tab_id, t);
         m.check_invariants().unwrap();
+    }
+
+    #[test]
+    fn playing_tabs_are_never_suspension_candidates() {
+        let mut m = TabManager::default();
+        let (w, oldest) = m.create_window(frame());
+        let (middle, _) = m.create_tab(&w, None).unwrap();
+        let (_front, _) = m.create_tab(&w, None).unwrap();
+        for tab in [&oldest, &middle] {
+            m.tab_mut(tab).unwrap().state = TabState::Active;
+        }
+        assert_eq!(
+            m.lru_suspension_candidates(0),
+            [oldest.clone(), middle.clone()]
+        );
+
+        // the least recently used tab starts playing: it is skipped, not the rest
+        m.set_audio(&oldest, AudioState::Audible).unwrap();
+        assert_eq!(m.lru_suspension_candidates(0), std::slice::from_ref(&middle));
+
+        // muted or stopped playback makes it eligible again
+        m.set_audio(&oldest, AudioState::Silent).unwrap();
+        assert_eq!(m.lru_suspension_candidates(0), [oldest, middle]);
     }
 
     #[test]

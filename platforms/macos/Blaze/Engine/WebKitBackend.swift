@@ -33,6 +33,12 @@ final class WebKitBackend: NSObject, ObservableObject {
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
         // Fullscreen video (T043, US3-AC3).
         config.preferences.isElementFullscreenEnabled = true
+        config.allowsAirPlayForMediaPlayback = true
+        // A bare WKWebView identifies as "AppleWebKit (KHTML, like Gecko)" with
+        // no browser token. Streaming sites read that as an unknown browser:
+        // fallback players, capped quality ladders, "unsupported browser"
+        // banners. Blaze renders with Safari's engine, so it says so.
+        config.applicationNameForUserAgent = Self.safariUserAgentSuffix
         webView = WKWebView(frame: .zero, configuration: config)
         self.bridge = bridge
         super.init()
@@ -48,6 +54,18 @@ final class WebKitBackend: NSObject, ObservableObject {
             self, selector: #selector(adblockToggled(_:)),
             name: .blazeAdblockChanged, object: nil)
     }
+
+    /// "Version/<Safari's version> Safari/605.1.15" — tracks the WebKit that is
+    /// actually installed, since that is what decides codec support.
+    private static let safariUserAgentSuffix: String = {
+        let safari = Bundle(path: "/Applications/Safari.app")?
+            .object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        // unreadable (sandbox): Safari ships with the OS — 26+ share its
+        // major version, earlier releases ran three ahead (macOS 15 ↔ Safari 18)
+        let os = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
+        let fallback = "\(os >= 26 ? os : os + 3).0"
+        return "Version/\(safari ?? fallback) Safari/605.1.15"
+    }()
 
     /// Global Shields toggle (T060): add/remove declarative rules live.
     @objc private func adblockToggled(_ note: Notification) {
@@ -171,11 +189,25 @@ final class WebKitBackend: NSObject, ObservableObject {
 
     /// Media playback + DRM detection; re-added after every cosmetics reset.
     private func installBuiltinScripts(into controller: WKUserContentController) {
+        if let enhancer = Self.mediaEnhancerJS {
+            controller.addUserScript(WKUserScript(
+                source: enhancer, injectionTime: .atDocumentStart, forMainFrameOnly: false))
+        }
         controller.addUserScript(WKUserScript(
             source: Self.mediaDetectionJS, injectionTime: .atDocumentStart, forMainFrameOnly: false))
         controller.addUserScript(WKUserScript(
             source: Self.drmDetectionJS, injectionTime: .atDocumentStart, forMainFrameOnly: false))
     }
+
+    /// Playback polish for every site — instant/in-sync subtitles, no stale
+    /// loaders or ad leftovers over the picture (assets/media/media-enhance.js).
+    /// Not tied to Shields: it blocks nothing.
+    private static let mediaEnhancerJS: String? = {
+        guard let url = Bundle.main.url(forResource: "assets", withExtension: nil)?
+            .appendingPathComponent("media/media-enhance.js")
+        else { return nil }
+        return try? String(contentsOf: url, encoding: .utf8)
+    }()
 
     /// Counts playing media elements and reports audible-state transitions.
     private static let mediaDetectionJS = """

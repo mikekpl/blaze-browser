@@ -11,6 +11,29 @@ use adblock::lists::{FilterSet, ParseOptions};
 /// WebKit's documented per-list rule cap.
 const WEBKIT_MAX_RULES: usize = 150_000;
 
+/// Subtitle/caption resources. No ad is ever served as one, but broad list
+/// rules (CDN paths, `$third-party` hosts) can catch them, and a blocked
+/// caption file fails silently — the viewer just gets no subtitles. These
+/// close the rule list as `ignore-previous-rules`, so they always win.
+/// (WebKit's rule regex has no alternation: one pattern per rule.)
+const SUBTITLE_URL_FILTERS: &[&str] = &[
+    r"\.vtt([?#].*)?$",
+    r"\.webvtt([?#].*)?$",
+    r"\.srt([?#].*)?$",
+    r"\.ttml([?#].*)?$",
+    r"\.dfxp([?#].*)?$",
+    r"/api/timedtext\?",
+];
+
+fn subtitle_exceptions() -> impl Iterator<Item = serde_json::Value> {
+    SUBTITLE_URL_FILTERS.iter().map(|filter| {
+        serde_json::json!({
+            "trigger": { "url-filter": filter },
+            "action": { "type": "ignore-previous-rules" },
+        })
+    })
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum WebkitRulesError {
     #[error("content-blocker conversion failed")]
@@ -36,18 +59,27 @@ pub fn compile_webkit_json<'a>(
         .into_content_blocking()
         .map_err(|()| WebkitRulesError::Conversion)?;
 
-    if rules.len() > WEBKIT_MAX_RULES {
+    // Room for the closing exceptions below, which must survive truncation.
+    let cap = WEBKIT_MAX_RULES - SUBTITLE_URL_FILTERS.len();
+    if rules.len() > cap {
         tracing::warn!(
             total = rules.len(),
-            cap = WEBKIT_MAX_RULES,
+            cap,
             "truncating content-blocker rules to WebKit cap"
         );
-        rules.truncate(WEBKIT_MAX_RULES - 1);
+        rules.truncate(cap - 1);
         // Keep first-party documents unblocked even after truncation.
         rules.push(adblock::content_blocking::ignore_previous_fp_documents());
     }
 
-    Ok((serde_json::to_string(&rules)?, unconvertible.len()))
+    let mut json = match serde_json::to_value(&rules)? {
+        serde_json::Value::Array(values) => values,
+        _ => Vec::new(),
+    };
+    if !json.is_empty() {
+        json.extend(subtitle_exceptions());
+    }
+    Ok((serde_json::to_string(&json)?, unconvertible.len()))
 }
 
 #[cfg(test)]
@@ -66,6 +98,24 @@ mod tests {
             assert!(rule.get("trigger").is_some());
             assert!(rule.get("action").is_some());
         }
+    }
+
+    #[test]
+    fn subtitle_files_are_exempt_and_exemptions_come_last() {
+        let (json, _) =
+            compile_webkit_json(["||cdn.example.com^$third-party\n"]).expect("compiles");
+        let rules: Vec<serde_json::Value> = serde_json::from_str(&json).expect("valid JSON");
+        let tail = &rules[rules.len() - SUBTITLE_URL_FILTERS.len()..];
+        for (rule, filter) in tail.iter().zip(SUBTITLE_URL_FILTERS) {
+            assert_eq!(rule["action"]["type"], "ignore-previous-rules");
+            assert_eq!(rule["trigger"]["url-filter"], *filter);
+        }
+        // the blocking rule is still there, ahead of them
+        assert!(
+            rules[..rules.len() - SUBTITLE_URL_FILTERS.len()]
+                .iter()
+                .any(|r| r["action"]["type"] == "block")
+        );
     }
 
     #[test]

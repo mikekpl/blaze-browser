@@ -46,6 +46,7 @@ Most browsers are Chromium wrappers — they carry Google's rendering engine, te
 * 🪶 **Lightweight** - Tab suspension frees memory automatically
 * 🚫 **Zero telemetry** - No data ever leaves your device
 * 🌙 **Dark & light mode** - Follows macOS system appearance instantly
+* 🎬 **Better video** - Instant, in-sync subtitles; no stale loaders or ad leftovers over the picture; full-quality streams (Safari-grade player on every site); playing tabs are never suspended
 * 📑 **Full tab management** - Create, close, pin, mute, reorder, move between windows
 * 🔖 **Bookmarks** - Toolbar, bookmarks bar, and full manager
 * ⬇️ **Downloads** - Native download engine with pause/resume/progress
